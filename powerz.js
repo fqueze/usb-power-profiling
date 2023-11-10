@@ -12,6 +12,10 @@ var sampleTimes = [];
 var samples = [];
 var gPromise, gClosing;
 
+function roundToNanoSecondPrecision(timeMs) {
+  return Math.round(timeMs * 1e6) / 1e6;
+}
+
 async function sample() {
   const CMD_GET_DATA = 0x0C;
   const ATT_ADC = 0x001;
@@ -112,7 +116,7 @@ async function startSampling() {
       }
     } while (w == previousW);
     previousW = w;
-    sampleTimes.push(performance.now() - startPerformanceNow);
+    sampleTimes.push(roundToNanoSecondPrecision(performance.now() - startPerformanceNow));
     samples.push(w);
     if (sampleTimes.length > MAX_SAMPLES) {
       sampleTimes.shift();
@@ -247,7 +251,7 @@ function profileFromData() {
     for (let i = 0; i < sampleTimes.length; ++i) {
       let sample = fun(i);
       let interval = timeInterval(i);
-      samples.push(Math.max(0, WattSecondToPicoWattHour(sample) * interval));
+      samples.push(Math.max(0, Math.round(WattSecondToPicoWattHour(sample) * interval)));
     }
     if (!samples.some(s => s > 0)) {
       continue;
@@ -280,11 +284,11 @@ const app = (req, res) => {
       ++endIndex;
     }
 
-    let times = sampleTimes.slice(startIndex, endIndex).map(t => t - timeStart);
+    let times = sampleTimes.slice(startIndex, endIndex).map(t => roundToNanoSecondPrecision(t - timeStart));
     let timeInterval = i => i == 0 ? 1 : (times[i] - times[i - 1]) / 1000;
     let counter = counterObject("USB power", gDeviceName, times,
                                 samples.slice(startIndex, endIndex)
-                                       .map((sample, i) => WattSecondToPicoWattHour(sample) * timeInterval(i)), true);
+                                       .map((sample, i) => Math.round(WattSecondToPicoWattHour(sample) * timeInterval(i))), true);
     sendJSON(res, [counter], true);
     return;
   }
