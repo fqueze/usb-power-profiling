@@ -106,7 +106,7 @@ async function startSampling() {
     do {
       count++;
       try {
-        w = await sample();
+        w = Math.abs(await sample());
       } catch(e) {
         console.log(e);
       }
