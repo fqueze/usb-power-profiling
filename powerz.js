@@ -20,33 +20,52 @@ async function sample() {
   const CMD_GET_DATA = 0x0C;
   const ATT_ADC = 0x001;
   let outbuf = Buffer.from([CMD_GET_DATA, 0, ATT_ADC << 1, 0]);
-  gPromise = new Promise(resolve => {
+
+  await new Promise((resolve, reject) => {
     gEndPointOut.transfer(outbuf, err => {
-      if (err)
+      if (err) {
         console.log("error while sending:", err);
+        reject(err);
+      }
       resolve();
     });
   });
-  await gPromise;
-  if (gClosing) {
-    throw("closing");
-    return;
-  }
-  
-  gPromise = new Promise(resolve => {
+
+  let data = await new Promise((resolve, reject) => {
     gEndPointIn.transfer(64, (error, data) => {
       if (error) {
         console.log("error reading data", error);
+        reject(error);
       }
       resolve(data);
     });
   });
-  let data = await gPromise;
-  gPromise = null;
 
   let v = data.readInt32LE(8);
   let i = data.readInt32LE(12);
   return (v / 1e6) * (i / 1e6);
+}
+
+async function getDeviceName(device) {
+  let manufacturer = await new Promise((resolve, reject) => {
+    device.getStringDescriptor(device.deviceDescriptor.iManufacturer, (err, manufacturer) => {
+      if (err) {
+        reject();
+      } else {
+        resolve(manufacturer);
+      }
+    })
+  });
+
+  return new Promise((resolve, reject) => {
+    device.getStringDescriptor(device.deviceDescriptor.iProduct, (err, productName) => {
+      if (!err && productName) {
+        resolve(`${manufacturer} — ${productName}`);
+      } else {
+        reject();
+      }
+    });
+  });
 }
 
 async function startSampling() {
@@ -55,23 +74,24 @@ async function startSampling() {
 
   gDevice = getDeviceList().find(d => d.deviceDescriptor.idVendor == VENDOR_ID);
   if (!gDevice) {
-    console.log("device not found")
+    console.log("No device found")
     return;
   }
 
   try {
     gDevice.open();
-    gDevice.getStringDescriptor(gDevice.deviceDescriptor.iManufacturer, (err, manufacturer) => {
-      if (err || !manufacturer) {
-        return;
-      }
-      gDevice.getStringDescriptor(gDevice.deviceDescriptor.iProduct, (err, productName) => {
-        if (!err && productName) {
-          gDeviceName = `${manufacturer} — ${productName}`;
-        }
-      });
-    });
+    gDeviceName = await getDeviceName(gDevice);
+    console.log("Found device:", gDeviceName);
     
+    await new Promise((resolve, reject) => gDevice.reset(error => {
+      if (error) {
+        console.log("failed to reset device", error);
+        reject(error);
+      } else {
+        resolve();
+      }
+    }));
+
     for (let interface of gDevice.interfaces) {
       let claimed = false;
       for (let endPoint of interface.endpoints) {
@@ -103,16 +123,30 @@ async function startSampling() {
     return;
   }
   
+  console.log("Sampling...");
   let previousW = 0;
   let w;
   while (gDevice) {
-    let count = 0;
     do {
-      count++;
       try {
-        w = Math.abs(await sample());
+        gPromise = sample();
+        w = Math.abs(await gPromise);
+        if (gClosing) {
+          try {
+            gDevice.close();
+          } catch(e) {}
+          gDevice = null;
+          process.exit();
+        }
       } catch(e) {
-        console.log(e);
+        if (e.code == "ERR_BUFFER_OUT_OF_BOUNDS") {
+          // We sometimes get this error on the first sample when the previous
+          // shutdown wasn't clean.
+          // The next samples work fine, so just ignore the error.
+          continue;
+        }
+        console.log("aborting sampling", e);
+        return;
       }
     } while (w == previousW);
     previousW = w;
@@ -129,12 +163,7 @@ process.on('SIGINT', function() {
   gClosing = true;
   if (gDevice) {
     if (gPromise) {
-      console.log("waiting for promise");
-      gPromise.then(() => {
-        gDevice.close();
-        gDevice = null;
-        process.exit();
-      })
+      // Should wait for the pending sample to finish.
     } else {
       gDevice.close();
       gDevice = null;
@@ -144,6 +173,33 @@ process.on('SIGINT', function() {
     process.exit();
   }
 });
+
+startSampling().then(() => {});
+
+usb.on('attach', async function(device) {
+  if (device.deviceDescriptor.idVendor != VENDOR_ID) {
+    return;
+  }
+  device.open();
+  console.log("Found device:", await getDeviceName(device));
+  device.close();
+});
+usb.on('detach', function(device) {
+  if (device.deviceDescriptor.idVendor != VENDOR_ID) {
+    return;
+  }
+  if (!gDevice) {
+    return;
+  }
+  if (device.busNumber == gDevice.busNumber && device.deviceAddress == gDevice.deviceAddress) {
+    console.log("our device has been detached");
+    gDevice.close();
+    gDevice = null;
+  } else {
+    console.log("detach", device, gDevice);
+  }
+});
+
 
 function sendJSON(res, data, forceGC = false) {
   res.statusCode = 200;
@@ -305,7 +361,5 @@ const app = (req, res) => {
 
 const server = http.createServer(app)
 server.listen(2121, "0.0.0.0", () => {
-  console.log("Testing server running at port 2121");
+  console.log("Ensure devtools.performance.recording.power.external-url is set to http://localhost:2121/power in 'about:config'.");
 });
-
-startSampling().then(() => {});
