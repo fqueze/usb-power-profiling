@@ -184,8 +184,6 @@ function counterObject(name, description, times, samples, geckoFormat = false) {
     name,
     category: "power",
     description,
-    pid: "0",
-    mainThreadIndex: 0,
   };
 
   if (geckoFormat) {
@@ -203,6 +201,8 @@ function counterObject(name, description, times, samples, geckoFormat = false) {
       }
     ];
   } else {
+    rv.pid = "0";
+    rv.mainThreadIndex = 0;
     rv.sampleGroups = [
       {
         id: 0,
@@ -285,7 +285,7 @@ const app = (req, res) => {
     let counter = counterObject("USB power", gDeviceName, times,
                                 samples.slice(startIndex, endIndex)
                                        .map((sample, i) => WattSecondToPicoWattHour(sample) * timeInterval(i)), true);
-    sendJSON(res, counter, true);
+    sendJSON(res, [counter], true);
     return;
   }
 
