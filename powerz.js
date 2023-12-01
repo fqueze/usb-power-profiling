@@ -2,49 +2,152 @@ const { usb, getDeviceList } = require('usb');
 const http = require('http');
 const url = require('url');
 
-const VENDOR_ID = 0x5FC9;
+const CHARGER_LAB_VENDOR_ID = 0x5FC9;
 const MAX_SAMPLES = 4000000; // About 1.5h at 1kHz.
 
-var gDevice, gEndPointIn, gEndPointOut;
-var gDeviceName = "External USB power meter";
+const gDevices = [];
 var startTime, startPerformanceNow;
-var sampleTimes = [];
-var samples = [];
-var gPromise, gClosing;
+var gClosing;
 
 function roundToNanoSecondPrecision(timeMs) {
   return Math.round(timeMs * 1e6) / 1e6;
 }
 
-async function sample() {
-  const CMD_GET_DATA = 0x0C;
-  const ATT_ADC = 0x001;
-  let outbuf = Buffer.from([CMD_GET_DATA, 0, ATT_ADC << 1, 0]);
-
-  await new Promise((resolve, reject) => {
-    gEndPointOut.transfer(outbuf, err => {
-      if (err) {
-        console.log("error while sending:", err);
-        reject(err);
-      }
-      resolve();
-    });
-  });
-
-  let data = await new Promise((resolve, reject) => {
-    gEndPointIn.transfer(64, (error, data) => {
-      if (error) {
-        console.log("error reading data", error);
-        reject(error);
-      }
-      resolve(data);
-    });
-  });
-
-  let v = data.readInt32LE(8);
-  let i = data.readInt32LE(12);
-  return (v / 1e6) * (i / 1e6);
+function PowerZDevice(device) {
+  this.device = device;
+  this.samples = [];
+  this.sampleTimes = [];
+  this.endPointIn = null;
+  this.endPointOut = null;
 }
+
+PowerZDevice.prototype = {
+  async sample() {
+    const CMD_GET_DATA = 0x0C;
+    const ATT_ADC = 0x001;
+    let outbuf = Buffer.from([CMD_GET_DATA, 0, ATT_ADC << 1, 0]);
+
+    await new Promise((resolve, reject) => {
+      this.endPointOut.transfer(outbuf, err => {
+        if (err) {
+          console.log("error while sending:", err);
+          reject(err);
+        }
+        resolve();
+      });
+    });
+
+    let data = await new Promise((resolve, reject) => {
+      this.endPointIn.transfer(64, (error, data) => {
+        if (error) {
+          console.log("error reading data", error);
+          reject(error);
+        }
+        resolve(data);
+      });
+    });
+
+    let v = data.readInt32LE(8);
+    let i = data.readInt32LE(12);
+    return (v / 1e6) * (i / 1e6);
+  },
+
+  async startSampling() {
+    try {
+      this.device.open();
+      this.deviceName = await getDeviceName(this.device);
+      console.log("Found device:", this.deviceName);
+
+      await new Promise((resolve, reject) => this.device.reset(error => {
+        if (error) {
+          console.log("failed to reset device", error);
+          reject(error);
+        } else {
+          resolve();
+        }
+      }));
+
+      for (let interface of this.device.interfaces) {
+        let claimed = false;
+        for (let endPoint of interface.endpoints) {
+          if (endPoint.transferType != usb.LIBUSB_TRANSFER_TYPE_BULK) {
+            continue;
+          }
+          if (endPoint.direction == "in" && !this.endPointIn) {
+            this.endPointIn = endPoint;
+            if (!claimed) {
+              claimed = true;
+              interface.claim();
+            }
+          }
+          if (endPoint.direction == "out" && !this.endPointOut) {
+            this.endPointOut = endPoint;
+            if (!claimed) {
+              claimed = true;
+              interface.claim();
+            }
+          }
+        }
+      }
+    } catch(e) {
+      console.log(e);
+    }
+
+    if (!this.endPointOut || !this.endPointIn) {
+      console.log("failed to find endpoints");
+      return;
+    }
+
+    console.log("Sampling...");
+    let previousW = 0;
+    let w = 0;
+    this.interval = setInterval(async () => {
+      if (this._promise) {
+        return;
+      }
+      do {
+        try {
+          this._promise = this.sample();
+          w = Math.abs(await this._promise);
+          this._promise = null;
+          if (gClosing) {
+            return;
+          }
+        } catch(e) {
+          if (e.code == "ERR_BUFFER_OUT_OF_BOUNDS") {
+            // We sometimes get this error on the first sample when the previous
+            // shutdown wasn't clean.
+            // The next samples work fine, so just ignore the error.
+            continue;
+          }
+          console.log("aborting sampling", e);
+          return this.stopSampling();
+        }
+      } while (w == previousW);
+      previousW = w;
+      this.sampleTimes.push(roundToNanoSecondPrecision(performance.now() - startPerformanceNow));
+      this.samples.push(w);
+      if (this.sampleTimes.length > MAX_SAMPLES) {
+        this.sampleTimes.shift();
+        this.samples.shift();
+      }
+    }, 1);
+  },
+
+  async stopSampling() {
+    clearInterval(this.interval);
+    if (this._promise) {
+      try {
+        await this._promise;
+      } catch(e) {}
+    }
+    this.endPointIn = null;
+    this.endPointOut = null;
+  }
+};
+
+const SUPPORTED_DEVICES = {}
+SUPPORTED_DEVICES[CHARGER_LAB_VENDOR_ID] = PowerZDevice;
 
 async function getDeviceName(device) {
   let manufacturer = await new Promise((resolve, reject) => {
@@ -68,135 +171,60 @@ async function getDeviceName(device) {
   });
 }
 
-async function startSampling() {
-  startTime = Date.now();
-  startPerformanceNow = performance.now();
-
-  gDevice = getDeviceList().find(d => d.deviceDescriptor.idVendor == VENDOR_ID);
-  if (!gDevice) {
-    console.log("No device found")
-    return;
-  }
-
-  try {
-    gDevice.open();
-    gDeviceName = await getDeviceName(gDevice);
-    console.log("Found device:", gDeviceName);
-    
-    await new Promise((resolve, reject) => gDevice.reset(error => {
-      if (error) {
-        console.log("failed to reset device", error);
-        reject(error);
-      } else {
-        resolve();
-      }
-    }));
-
-    for (let interface of gDevice.interfaces) {
-      let claimed = false;
-      for (let endPoint of interface.endpoints) {
-        if (endPoint.transferType != usb.LIBUSB_TRANSFER_TYPE_BULK) {
-          continue;
-        }
-        if (endPoint.direction == "in" && !gEndPointIn) {
-          gEndPointIn = endPoint;
-          if (!claimed) {
-            claimed = true;
-            interface.claim();
-          }
-        }
-        if (endPoint.direction == "out" && !gEndPointOut) {
-          gEndPointOut = endPoint;
-          if (!claimed) {
-            claimed = true;
-            interface.claim();
-          }
-        }
-      }
-    }
-  } catch(e) {
-    console.log(e);
-  }
-
-  if (!gEndPointOut || !gEndPointIn) {
-    console.log("failed to find endpoints");
-    return;
-  }
-  
-  console.log("Sampling...");
-  let previousW = 0;
-  let w;
-  while (gDevice) {
-    do {
-      try {
-        gPromise = sample();
-        w = Math.abs(await gPromise);
-        if (gClosing) {
-          try {
-            gDevice.close();
-          } catch(e) {}
-          gDevice = null;
-          process.exit();
-        }
-      } catch(e) {
-        if (e.code == "ERR_BUFFER_OUT_OF_BOUNDS") {
-          // We sometimes get this error on the first sample when the previous
-          // shutdown wasn't clean.
-          // The next samples work fine, so just ignore the error.
-          continue;
-        }
-        console.log("aborting sampling", e);
-        return;
-      }
-    } while (w == previousW);
-    previousW = w;
-    sampleTimes.push(roundToNanoSecondPrecision(performance.now() - startPerformanceNow));
-    samples.push(w);
-    if (sampleTimes.length > MAX_SAMPLES) {
-      sampleTimes.shift();
-      samples.shift();
+async function tryDevice(device) {
+  const vendorId = device.deviceDescriptor.idVendor;
+  if (vendorId in SUPPORTED_DEVICES) {
+    const dev = new SUPPORTED_DEVICES[vendorId](device);
+    try {
+      await dev.startSampling();
+      gDevices.push(dev);
+    } catch(e) {
+      console.log(e);
     }
   }
 }
 
-process.on('SIGINT', function() {
-  gClosing = true;
-  if (gDevice) {
-    if (gPromise) {
-      // Should wait for the pending sample to finish.
-    } else {
-      gDevice.close();
-      gDevice = null;
-      process.exit();
-    }
-  } else {
-    process.exit();
+async function startSampling() {
+  startTime = Date.now();
+  startPerformanceNow = performance.now();
+
+  const devices = getDeviceList();
+  for (let device of devices) {
+    await tryDevice(device);
   }
+  if (gDevices.length == 0) {
+    console.log("No device found")
+  }
+}
+
+process.on('SIGINT', async function() {
+  gClosing = true;
+  if (gDevices.length > 0) {
+    await Promise.all(gDevices.map(d => d.stopSampling()));
+  }
+  process.exit();
 });
 
 startSampling().then(() => {});
 
-usb.on('attach', async function(device) {
-  if (device.deviceDescriptor.idVendor != VENDOR_ID) {
-    return;
-  }
-  device.open();
-  console.log("Found device:", await getDeviceName(device));
-  device.close();
-});
+usb.on('attach', tryDevice);
 usb.on('detach', function(device) {
-  if (device.deviceDescriptor.idVendor != VENDOR_ID) {
+  if (!(device.deviceDescriptor.idVendor in SUPPORTED_DEVICES)) {
     return;
   }
-  if (!gDevice) {
+
+  if (!gDevices.length) {
     return;
   }
-  if (device.busNumber == gDevice.busNumber && device.deviceAddress == gDevice.deviceAddress) {
-    console.log("our device has been detached");
-    gDevice.close();
-    gDevice = null;
+
+  const dev = gDevices.find(d => device.busNumber == d.device.busNumber && device.deviceAddress == d.device.deviceAddress);
+  if (dev) {
+    console.log(dev.deviceName, "has been detached");
+    dev.device.close();
+    dev.device = null;
+    gDevices.splice(gDevices.indexOf(dev), 1);
   } else {
-    console.log("detach", device, gDevice);
+    console.log("detach", device);
   }
 });
 
@@ -276,13 +304,18 @@ function counterObject(name, description, times, samples, geckoFormat = false) {
 }
 
 function profileFromData() {
+  if (!gDevices.length) {
+    throw "No device is being sampled";
+  }
+  const dev = gDevices[0]; //TODO: include data for all devices
 
   let profile = JSON.parse(baseProfile);
   profile.meta.startTime = startTime;
   profile.meta.product = new Date(startTime).toLocaleDateString("fr-FR", {timeZone: "Europe/Paris"}) + " — USB power";
   profile.meta.physicalCPUs = 1;
-  profile.meta.CPUName = gDeviceName;
+  profile.meta.CPUName = gDevices.map(d => d.deviceName).join(", ");
 
+  const sampleTimes = dev.sampleTimes;
   let zeros = new Array(sampleTimes.length).fill(0);
   let firstThread = profile.threads[0];
   let threadSamples = firstThread.samples;
@@ -296,11 +329,11 @@ function profileFromData() {
   const counters = [
     {
       name: "USB power",
-      description: gDeviceName,
-      fun: i => samples[i],
+      description: dev.deviceName,
+      fun: i => dev.samples[i],
     },
   ];
-  
+
   let timeInterval = i => i == 0 ? 1 : (sampleTimes[i] - sampleTimes[i - 1]) / 1000;
   for (let {name, description, fun} of counters) {
     let samples = [];
@@ -322,11 +355,19 @@ const app = (req, res) => {
   console.log(new Date(), req.url);
 
   if (req.url.startsWith("/power")) {
+    if (!gDevices.length) {
+      sendError(res, "power: no device is being sampled");
+      return;
+    }
+
     const query = url.parse(req.url, true).query;
     if (!query.start && !query.end) {
       sendError(res, "power: unexpected case");
       return;
     }
+
+    //TODO: include data for all devices
+    const {samples, sampleTimes, deviceName} = gDevices[0];
 
     let timeStart = parseFloat(query.start) - startTime;
     let startIndex = 0;
@@ -342,7 +383,7 @@ const app = (req, res) => {
 
     let times = sampleTimes.slice(startIndex, endIndex).map(t => roundToNanoSecondPrecision(t - timeStart));
     let timeInterval = i => i == 0 ? 1 : (times[i] - times[i - 1]) / 1000;
-    let counter = counterObject("USB power", gDeviceName, times,
+    let counter = counterObject("USB power", deviceName, times,
                                 samples.slice(startIndex, endIndex)
                                        .map((sample, i) => Math.round(WattSecondToPicoWattHour(sample) * timeInterval(i))), true);
     sendJSON(res, [counter], true);
