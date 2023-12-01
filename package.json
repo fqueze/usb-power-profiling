@@ -1,5 +1,7 @@
 {
   "dependencies": {
+    "crc-full": "^1.1.0",
+    "node-hid": "^3.0.0",
     "usb": "^2.9.0"
   }
 }

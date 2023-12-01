@@ -1,8 +1,12 @@
 const { usb, getDeviceList } = require('usb');
+const HID = require('node-hid');
 const http = require('http');
 const url = require('url');
+const { CRC } = require('crc-full');
 
 const CHARGER_LAB_VENDOR_ID = 0x5FC9;
+const FNIRSI_VENDOR_ID = 0x2E3C;
+
 const MAX_SAMPLES = 4000000; // About 1.5h at 1kHz.
 
 const gDevices = [];
@@ -146,8 +150,95 @@ PowerZDevice.prototype = {
   }
 };
 
+function FnirsiDevice(device) {
+  this.device = device;
+  this.samples = [];
+  this.sampleTimes = [];
+}
+
+FnirsiDevice.prototype = {
+  _crc: new CRC("CRC", 8, 0x39, 0x42),
+  checksum(data) { return this._crc.compute(data.slice(1,63)); },
+
+  COMMON_PREFIX: 0xAA,
+  // Not sure what this does, things work as well without sending it.
+  CMD_INIT: 0x81,
+  // Request samples from the device. Every 40ms the device will send a data
+  // packet containing 4 samples. Sampling will stop after 1s.
+  CMD_START_SAMPLING: 0x82,
+  // If sent before the end of the 1s sampling time, this command will make
+  // sampling continue for another 1s. Not sure why this command is needed,
+  // as just repeatedly sending CMD_START_SAMPLING seems to work just fine.
+  CMD_CONTINUE_SAMPLING: 0x83,
+
+  sendCommand(cmd) {
+    var outData = new Array(64).fill(0);
+    outData[0] = this.COMMON_PREFIX;
+    outData[1] = cmd;
+    outData[63] = this.checksum(outData);
+    return this.hidDevice.write(outData);
+  },
+
+  async startSampling() {
+    this.device.open();
+    this.deviceName = await getDeviceName(this.device);
+    console.log("Found device:", this.deviceName);
+
+    this.hidDevice = new HID.HID(11836, 73);
+    this.hidDevice.on('data', data => {
+      if (data[0] != this.COMMON_PREFIX || data[1] != 0x04) {
+        // ignore when not a data packet.
+        return;
+      }
+
+      const sampleTime = roundToNanoSecondPrecision(performance.now() - startPerformanceNow);
+      if (data[63] != this.checksum(data)) {
+        console.log("Invalid CRC:", data[63], "computed:",
+                    this.checksum(data));
+      }
+
+      for (sampleId = 0; sampleId < 4; ++sampleId) {
+        const offset = 2 + 15 * sampleId;
+        const voltage = data.readInt32LE(offset) / 1e5;
+        const current = data.readInt32LE(offset + 4) / 1e5;
+        this.sampleTimes.push(sampleTime - 10 * (3 - sampleId));
+        this.samples.push(voltage * current);
+        if (this.sampleTimes.length > MAX_SAMPLES) {
+          this.sampleTimes.shift();
+          this.samples.shift();
+        }
+      }
+    });
+    this.hidDevice.on('error', err => {
+      console.log("hid device error:", err);
+      clearInterval(this.timerId);
+    });
+
+    await this.sendCommand(this.CMD_START_SAMPLING);
+    this.timerId = setInterval(async () => {
+      if (gClosing) {
+        return;
+      }
+      // Could send CMD_CONTINUE_SAMPLING instead, but if somehow we are late
+      // and sampling had already stopped, it would be ignored.
+      // CMD_START_SAMPLING works in all cases.
+      try {
+        await this.sendCommand(this.CMD_START_SAMPLING);
+      } catch(e) {
+        console.log("error sending command:", e);
+      }
+    }, 500); // Should be at least every second.
+  },
+
+  async stopSampling() {
+    clearInterval(this.timerId);
+    this.hidDevice = null;
+  }
+};
+
 const SUPPORTED_DEVICES = {}
 SUPPORTED_DEVICES[CHARGER_LAB_VENDOR_ID] = PowerZDevice;
+SUPPORTED_DEVICES[FNIRSI_VENDOR_ID] = FnirsiDevice;
 
 async function getDeviceName(device) {
   let manufacturer = await new Promise((resolve, reject) => {
