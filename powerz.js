@@ -184,6 +184,7 @@ FnirsiDevice.prototype = {
     this.deviceName = await getDeviceName(this.device);
     console.log("Found device:", this.deviceName);
 
+    var previousSampleTime = performance.now();
     this.hidDevice = new HID.HID(11836, 73);
     this.hidDevice.on('data', data => {
       if (data[0] != this.COMMON_PREFIX || data[1] != 0x04) {
@@ -191,17 +192,33 @@ FnirsiDevice.prototype = {
         return;
       }
 
-      const sampleTime = roundToNanoSecondPrecision(performance.now() - startPerformanceNow);
+      const timeBetweenPackets = 40;
+      const samplesPerPacket = 4;
+      const intervalBetweenSamples = timeBetweenPackets / samplesPerPacket;
+      // The sampling is driven by the device, so it happens at a consistent
+      // rate. We sometimes have late packets, adjust the timestamps.
+      let now = performance.now();
+      const delta = now - previousSampleTime - timeBetweenPackets;
+      // Only adjust if the delay is reasonable.
+      if (delta > intervalBetweenSamples / 4 &&
+          delta < timeBetweenPackets) {
+        now -= delta;
+      }
+      previousSampleTime = now;
+
+      const sampleTime = now - startPerformanceNow;
       if (data[63] != this.checksum(data)) {
         console.log("Invalid CRC:", data[63], "computed:",
                     this.checksum(data));
       }
 
-      for (sampleId = 0; sampleId < 4; ++sampleId) {
+      for (sampleId = 0; sampleId < samplesPerPacket; ++sampleId) {
         const offset = 2 + 15 * sampleId;
         const voltage = data.readInt32LE(offset) / 1e5;
         const current = data.readInt32LE(offset + 4) / 1e5;
-        this.sampleTimes.push(sampleTime - 10 * (3 - sampleId));
+        const timeOffset =
+          intervalBetweenSamples * (samplesPerPacket - 1 - sampleId);
+        this.sampleTimes.push(roundToNanoSecondPrecision(sampleTime - timeOffset));
         this.samples.push(voltage * current);
         if (this.sampleTimes.length > MAX_SAMPLES) {
           this.sampleTimes.shift();
@@ -215,6 +232,8 @@ FnirsiDevice.prototype = {
     });
 
     await this.sendCommand(this.CMD_START_SAMPLING);
+    console.log("Sampling...");
+
     this.timerId = setInterval(async () => {
       if (gClosing) {
         return;
