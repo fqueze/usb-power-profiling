@@ -6,7 +6,9 @@ const { CRC } = require('crc-full');
 
 const CHARGER_LAB_VENDOR_ID = 0x5FC9;
 const FNIRSI_VENDOR_ID = 0x2E3C;
-const SHIZUKU_VENDOR_ID = 0x483;
+const SHIZUKU_AND_FNIRSI_VENDOR_ID = 0x483;
+const SHIZUKU_PRODUCT_IDS = [0xFFFF, 0xFFE, 0x374B];
+const FNIRSI_PRODUCT_IDS = [0x3A, 0x3B];
 
 const DEBUG = false;//true;
 const DEBUG_log = DEBUG ? console.log : () => {};
@@ -199,7 +201,8 @@ FnirsiDevice.prototype = {
 
   async startSampling() {
     var previousSampleTime = performance.now();
-    this.hidDevice = new HID.HID(11836, 73);
+    const {idVendor, idProduct} = this.device.deviceDescriptor;
+    this.hidDevice = new HID.HID(idVendor, idProduct);
     this.hidDevice.on('data', data => {
       if (data[0] != this.COMMON_PREFIX || data[1] != 0x04) {
         // ignore when not a data packet.
@@ -266,12 +269,6 @@ FnirsiDevice.prototype = {
 };
 
 function ShizukuDevice(device) {
-  const productId = device.deviceDescriptor.idProduct;
-  if (![0xFFFF, 0xFFE, 0x374B].includes(productId)) {
-    throw "unrecognized Shizuku device";
-  } else if (DEBUG) {
-    console.log("valid product id", productId);
-  }
   this.endPointIn = null;
   this.endPointOut = null;
   this.lastRequestId = 0;
@@ -452,7 +449,6 @@ ShizukuDevice.prototype = {
 const SUPPORTED_DEVICES = {}
 SUPPORTED_DEVICES[CHARGER_LAB_VENDOR_ID] = PowerZDevice;
 SUPPORTED_DEVICES[FNIRSI_VENDOR_ID] = FnirsiDevice;
-SUPPORTED_DEVICES[SHIZUKU_VENDOR_ID] = ShizukuDevice;
 
 async function getDeviceName(device) {
   let manufacturer = await new Promise((resolve, reject) => {
@@ -478,8 +474,19 @@ async function getDeviceName(device) {
 
 async function tryDevice(device) {
   const vendorId = device.deviceDescriptor.idVendor;
-  if (vendorId in SUPPORTED_DEVICES) {
-    const dev = new SUPPORTED_DEVICES[vendorId](device);
+  let dev;
+  if (vendorId == SHIZUKU_AND_FNIRSI_VENDOR_ID) {
+    const productId = device.deviceDescriptor.idProduct;
+    if (SHIZUKU_PRODUCT_IDS.includes(productId)) {
+      dev = new ShizukuDevice(device);
+    } else if (FNIRSI_PRODUCT_IDS.includes(productId)) {
+      dev = new FnirsiDevice(device);
+    }
+  } else if (vendorId in SUPPORTED_DEVICES) {
+    dev = new SUPPORTED_DEVICES[vendorId](device);
+  }
+
+  if (dev) {
     try {
       device.open();
       dev.deviceName = await getDeviceName(device);
