@@ -6,6 +6,10 @@ const { CRC } = require('crc-full');
 
 const CHARGER_LAB_VENDOR_ID = 0x5FC9;
 const FNIRSI_VENDOR_ID = 0x2E3C;
+const SHIZUKU_VENDOR_ID = 0x483;
+
+const DEBUG = false;//true;
+const DEBUG_log = DEBUG ? console.log : () => {};
 
 const MAX_SAMPLES = 4000000; // About 1.5h at 1kHz.
 
@@ -17,10 +21,72 @@ function roundToNanoSecondPrecision(timeMs) {
   return Math.round(timeMs * 1e6) / 1e6;
 }
 
+function int32Bytes(number) {
+  const buffer = Buffer.alloc(4);
+  buffer.writeInt32LE(number);
+  return buffer;
+}
+
+function resetDevice(device) {
+  return new Promise((resolve, reject) => device.reset(error => {
+    if (error) {
+      console.log("failed to reset device", error);
+      reject(error);
+    } else {
+      resolve();
+    }
+  }));
+}
+
+function sendBuffer(endPointOut, buffer) {
+  return new Promise((resolve, reject) => {
+    endPointOut.transfer(buffer, err => {
+      if (err) {
+        console.log("error while sending:", err);
+        reject(err);
+      }
+      resolve();
+    });
+  });
+}
+
+function findBulkInOutEndPoints(device) {
+  let endPointIn, endPointOut;
+  for (let interface of device.interfaces) {
+    let claimed = false;
+    for (let endPoint of interface.endpoints) {
+      if (endPoint.transferType != usb.LIBUSB_TRANSFER_TYPE_BULK) {
+        continue;
+      }
+      if (endPoint.direction == "in" && !endPointIn) {
+        endPointIn = endPoint;
+        if (!claimed) {
+          claimed = true;
+          interface.claim();
+        }
+      }
+      if (endPoint.direction == "out" && !endPointOut) {
+        endPointOut = endPoint;
+        if (!claimed) {
+          claimed = true;
+          interface.claim();
+        }
+      }
+    }
+  }
+  return [endPointIn, endPointOut];
+}
+
+function addSample(self, time, power) {
+  self.sampleTimes.push(time);
+  self.samples.push(power);
+  if (self.sampleTimes.length > MAX_SAMPLES) {
+    self.sampleTimes.shift();
+    self.samples.shift();
+  }
+}
+
 function PowerZDevice(device) {
-  this.device = device;
-  this.samples = [];
-  this.sampleTimes = [];
   this.endPointIn = null;
   this.endPointOut = null;
 }
@@ -29,17 +95,8 @@ PowerZDevice.prototype = {
   async sample() {
     const CMD_GET_DATA = 0x0C;
     const ATT_ADC = 0x001;
-    let outbuf = Buffer.from([CMD_GET_DATA, 0, ATT_ADC << 1, 0]);
-
-    await new Promise((resolve, reject) => {
-      this.endPointOut.transfer(outbuf, err => {
-        if (err) {
-          console.log("error while sending:", err);
-          reject(err);
-        }
-        resolve();
-      });
-    });
+    await sendBuffer(this.endPointOut,
+                     Buffer.from([CMD_GET_DATA, 0, ATT_ADC << 1, 0]));
 
     let data = await new Promise((resolve, reject) => {
       this.endPointIn.transfer(64, (error, data) => {
@@ -58,41 +115,8 @@ PowerZDevice.prototype = {
 
   async startSampling() {
     try {
-      this.device.open();
-      this.deviceName = await getDeviceName(this.device);
-      console.log("Found device:", this.deviceName);
-
-      await new Promise((resolve, reject) => this.device.reset(error => {
-        if (error) {
-          console.log("failed to reset device", error);
-          reject(error);
-        } else {
-          resolve();
-        }
-      }));
-
-      for (let interface of this.device.interfaces) {
-        let claimed = false;
-        for (let endPoint of interface.endpoints) {
-          if (endPoint.transferType != usb.LIBUSB_TRANSFER_TYPE_BULK) {
-            continue;
-          }
-          if (endPoint.direction == "in" && !this.endPointIn) {
-            this.endPointIn = endPoint;
-            if (!claimed) {
-              claimed = true;
-              interface.claim();
-            }
-          }
-          if (endPoint.direction == "out" && !this.endPointOut) {
-            this.endPointOut = endPoint;
-            if (!claimed) {
-              claimed = true;
-              interface.claim();
-            }
-          }
-        }
-      }
+      await resetDevice(this.device);
+      [this.endPointIn, this.endPointOut] = findBulkInOutEndPoints(this.device);
     } catch(e) {
       console.log(e);
     }
@@ -129,12 +153,9 @@ PowerZDevice.prototype = {
         }
       } while (w == previousW);
       previousW = w;
-      this.sampleTimes.push(roundToNanoSecondPrecision(performance.now() - startPerformanceNow));
-      this.samples.push(w);
-      if (this.sampleTimes.length > MAX_SAMPLES) {
-        this.sampleTimes.shift();
-        this.samples.shift();
-      }
+      addSample(this,
+                roundToNanoSecondPrecision(performance.now() - startPerformanceNow),
+                w);
     }, 1);
   },
 
@@ -151,9 +172,6 @@ PowerZDevice.prototype = {
 };
 
 function FnirsiDevice(device) {
-  this.device = device;
-  this.samples = [];
-  this.sampleTimes = [];
 }
 
 FnirsiDevice.prototype = {
@@ -180,10 +198,6 @@ FnirsiDevice.prototype = {
   },
 
   async startSampling() {
-    this.device.open();
-    this.deviceName = await getDeviceName(this.device);
-    console.log("Found device:", this.deviceName);
-
     var previousSampleTime = performance.now();
     this.hidDevice = new HID.HID(11836, 73);
     this.hidDevice.on('data', data => {
@@ -218,12 +232,8 @@ FnirsiDevice.prototype = {
         const current = data.readInt32LE(offset + 4) / 1e5;
         const timeOffset =
           intervalBetweenSamples * (samplesPerPacket - 1 - sampleId);
-        this.sampleTimes.push(roundToNanoSecondPrecision(sampleTime - timeOffset));
-        this.samples.push(voltage * current);
-        if (this.sampleTimes.length > MAX_SAMPLES) {
-          this.sampleTimes.shift();
-          this.samples.shift();
-        }
+        addSample(this, roundToNanoSecondPrecision(sampleTime - timeOffset),
+                  voltage * current)
       }
     });
     this.hidDevice.on('error', err => {
@@ -249,15 +259,200 @@ FnirsiDevice.prototype = {
     }, 500); // Should be at least every second.
   },
 
-  async stopSampling() {
+  stopSampling() {
     clearInterval(this.timerId);
     this.hidDevice = null;
+  }
+};
+
+function ShizukuDevice(device) {
+  const productId = device.deviceDescriptor.idProduct;
+  if (![0xFFFF, 0xFFE, 0x374B].includes(productId)) {
+    throw "unrecognized Shizuku device";
+  } else if (DEBUG) {
+    console.log("valid product id", productId);
+  }
+  this.endPointIn = null;
+  this.endPointOut = null;
+  this.lastRequestId = 0;
+  this.expectedReplies = {};
+}
+
+ShizukuDevice.prototype = {
+  samplingInterval: 1, // value in ms.
+  BEGIN_DATA: 0xA5,
+  END_DATA: 0x5A,
+  CMD_STOP: 0x7,
+  CMD_START_SAMPLING: 0x9,
+
+  checksum(data) { return data.reduce((acc, curr) => acc ^ curr); },
+
+  async sendCommand(cmd, args = []) {
+    const promise = new Promise(resolve => {
+      this.expectedReplies[this.lastRequestId] = resolve;
+    });
+    const COMMON_REQUEST_PREFIX = 0x1;
+    const data = [COMMON_REQUEST_PREFIX, cmd, this.lastRequestId++, 0, ...args];
+    DEBUG_log("sending command", Buffer.from(data));
+    await sendBuffer(this.endPointOut,
+                      Buffer.from([this.BEGIN_DATA,
+                                   ...int32Bytes(data.length), ...data,
+                                   this.checksum(data), this.END_DATA]));
+    return promise;
+  },
+
+  samplingRequestId: -1,
+  initialTimeStamp: 0,
+  initialNow: 0,
+  _pendingData: null,
+  ondata(data) {
+    if (this._pendingData) {
+      DEBUG_log("using _pendingData", this._pendingData, "and new data", data);
+      data = Buffer.concat([this._pendingData, data]);
+      this._pendingData = null;
+    }
+
+    if (data.length < 1 || data[0] != this.BEGIN_DATA) {
+      console.log("ignoring a bogus piece of data", data);
+      return;
+    }
+
+    const minLength =
+      1 /* BEGIN_DATA */ + 4 /* 32bit length */ +
+      1 /* checksum */ + 1 /* END_DATA */;
+    if (data.length < minLength) {
+      DEBUG_log("not a full data packet, keeping this piece of data for later", data);
+      this._pendingData = data;
+      return;
+    }
+
+    const length = data.readInt32LE(1);
+    if (data.length < minLength + length) {
+      DEBUG_log("not a full data packet, keeping this piece of data for later", data);
+      this._pendingData = data;
+      return;
+    }
+
+    const payloadStart = 1 + 4; // 1 for the header, 4 for the 32 bit length
+    let payload = data.slice(payloadStart, payloadStart + length);
+    if (this.checksum(payload) != data[payloadStart + length]) {
+      console.log("invalid checksum, expected:", this.checksum(payload),
+                  "got:", data[payloadStart + length],
+                  "payload:", payload);
+      return;
+    }
+
+    let nextData = null;
+    if (data.length > minLength + length) {
+      nextData = data.slice(minLength + length);
+      DEBUG_log("next data", nextData);
+    }
+
+    // Check if we received a reply we were waiting for.
+    // Unsure about the meaning of the first 2 bytes.
+    if (payload.length == 4 &&
+        payload[3] == 0x80 && // seems to mean "reply"
+        this.expectedReplies.hasOwnProperty(payload[2])) {
+      DEBUG_log("got a reply we were waiting for", payload);
+      this.expectedReplies[payload[2]]();
+      delete this.expectedReplies[payload[2]];
+      if (nextData) {
+        DEBUG_log("processing next data");
+        this.ondata(nextData);
+      }
+      return;
+    }
+
+    // At this point ignore anything that doesn't look like a sample.
+    if (payload.length < 4     /* header */ +
+                         2 * 4 /* 2 32 bit floats */ +
+                         8     /* 64 bit timestamp */ ||
+        payload[0] != 0x4 || // Not sure what this means. Maybe 'data' packet?
+        payload[1] != 0 ||   // ?? Maybe this was a 16 bit value.
+        payload[2] != this.samplingRequestId ||
+        payload[3] != 0) { // Seems to be 0x80 for replies and 0 otherwise.
+      console.log("ignoring unexpected payload", payload);
+      if (nextData) {
+        DEBUG_log("processing next data");
+        this.ondata(nextData);
+      }
+      return;
+    }
+
+    const sample = payload.slice(4);
+    const voltage = sample.readFloatLE();
+    const current = Math.abs(sample.readFloatLE(4));
+    // Seems to be the time in µs since the power meter was started.
+    const timestamp = sample.readBigUInt64LE(sample.length - 8);
+    if (!this.initialTimeStamp) {
+      this.initialTimeStamp = timestamp;
+      this.initialPerformanceNow = performance.now() - startPerformanceNow;
+    }
+    const time =
+      this.initialPerformanceNow + Number(timestamp - this.initialTimeStamp) / 1000;
+    const power = Math.round(voltage * current * 1e4) / 1e4;
+    DEBUG_log(new Date(), power);
+    addSample(this, roundToNanoSecondPrecision(time), power);
+
+    if (nextData) {
+      DEBUG_log("processing next data");
+      this.ondata(nextData);
+    }
+  },
+
+  async startSampling() {
+    try {
+      await resetDevice(this.device);
+      [this.endPointIn, this.endPointOut] = findBulkInOutEndPoints(this.device);
+    } catch(e) {
+      console.log(e);
+    }
+
+    if (!this.endPointOut || !this.endPointIn) {
+      console.log("failed to find endpoints");
+      return;
+    }
+
+    // When sampling every 1ms, the default of keeping 3 data blocks pending
+    // in the kernel is not enough, as it's easy for our thread to be blocked
+    // for more than 3ms.
+    this.endPointIn.startPoll(150);
+    this.endPointIn.on('data', data => this.ondata(data))
+    this.endPointIn.on('error', err => {
+      console.log("Error:", err);
+    });
+
+    DEBUG_log("sending CMD_STOP before we start sampling");
+    await this.sendCommand(this.CMD_STOP);
+
+    this.samplingRequestId = this.lastRequestId;
+    await this.sendCommand(this.CMD_START_SAMPLING,
+                           int32Bytes(this.samplingInterval));
+    console.log("Sampling...");
+  },
+
+  async stopSampling() {
+    if (!this.endPointOut) {
+      if (DEBUG) {
+        console.log("already in the process of stopping sampling");
+      }
+      return;
+    }
+
+    DEBUG_log("sending CMD_STOP");
+    const stopPromise = this.sendCommand(this.CMD_STOP);
+    this.endPointOut = null;
+    await stopPromise;
+
+    await new Promise(resolve => this.endPointIn.stopPoll(resolve));
+    this.endPointIn = null;
   }
 };
 
 const SUPPORTED_DEVICES = {}
 SUPPORTED_DEVICES[CHARGER_LAB_VENDOR_ID] = PowerZDevice;
 SUPPORTED_DEVICES[FNIRSI_VENDOR_ID] = FnirsiDevice;
+SUPPORTED_DEVICES[SHIZUKU_VENDOR_ID] = ShizukuDevice;
 
 async function getDeviceName(device) {
   let manufacturer = await new Promise((resolve, reject) => {
@@ -286,11 +481,23 @@ async function tryDevice(device) {
   if (vendorId in SUPPORTED_DEVICES) {
     const dev = new SUPPORTED_DEVICES[vendorId](device);
     try {
+      device.open();
+      dev.deviceName = await getDeviceName(device);
+      console.log("Found device:", dev.deviceName);
+      dev.device = device;
+      dev.samples = [];
+      dev.sampleTimes = [];
       await dev.startSampling();
       gDevices.push(dev);
     } catch(e) {
       console.log(e);
     }
+  } else if (DEBUG) {
+    try {
+      device.open();
+      console.log("found unknown device:", await getDeviceName(device), device);
+      device.close();
+    } catch(e) { console.log(e); }
   }
 }
 
@@ -308,6 +515,9 @@ async function startSampling() {
 }
 
 process.on('SIGINT', async function() {
+  if (gClosing) {
+    return;
+  }
   gClosing = true;
   if (gDevices.length > 0) {
     await Promise.all(gDevices.map(d => d.stopSampling()));
