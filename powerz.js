@@ -7,6 +7,7 @@ const { CRC } = require('crc-full');
 const CHARGER_LAB_VENDOR_ID = 0x5FC9;
 const FNIRSI_VENDOR_ID = 0x2E3C;
 const KINGMETER_VENDOR_ID = 0x416;
+const CHARGER_LAB_BLUE_VENDOR_ID = 0x472;
 const GENERIC_VENDOR_ID = 0x483;
 const SHIZUKU_PRODUCT_IDS = [0xFFFF, 0xFFE, 0x374B];
 const FNIRSI_PRODUCT_IDS = [0x3A, 0x3B];
@@ -559,10 +560,65 @@ KingMeterDevice.prototype = {
   }
 };
 
+function PowerZBlueDevice(device) {
+}
+
+PowerZBlueDevice.prototype = {
+  _crc: CRC.default("CRC16_MODBUS"),
+  checksum(data) { return this._crc.compute(data.slice(0,62)); },
+
+  async startSampling() {
+    const {idVendor, idProduct} = this.device.deviceDescriptor;
+    this.hidDevice = new HID.HID(idVendor, idProduct);
+
+    this.hidDevice.on('data', data => {
+      if (this.checksum(data) != data.readUInt16LE(62)) {
+        console.log(data.toString("hex"),
+                    "Invalid CRC:", data.readUInt16LE(62), "computed:",
+                    this.checksum(data));
+        return;
+      }
+
+      if (DEBUG) {
+        // First 3 bytes seem to always be [0, 3, 0x3b].
+        // Then there are 7 32bit BigEndian floats.
+        const sample = {
+          v: data.readFloatBE(3),
+          i: data.readFloatBE(7),
+          p: data.readFloatBE(11),
+          "d+": data.readFloatBE(15),
+          "d-": data.readFloatBE(19),
+          temp1: data.readFloatBE(23),
+          temp2: data.readFloatBE(27), // temp2 seems to == temp1
+          // The rest is unknown. Example of the unknown data:
+          // 01 00 03 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 06 01 00 00 00 00 00 00 28 08
+          // The first unknown byte is sometimes 0, sometimes 1.
+          // The other bytes don't change from one sample to another.
+          unknown: data.slice(31, 62),
+        };
+        console.log(sample);
+      }
+
+      addSample(this,
+                roundToNanoSecondPrecision(performance.now() - startPerformanceNow),
+                data.readFloatBE(11));
+    });
+    this.hidDevice.on('error', err => {
+      console.log("hid device error:", err);
+    });
+    console.log("Sampling...");
+  },
+
+  stopSampling() {
+    this.hidDevice = null;
+  }
+};
+
 const SUPPORTED_DEVICES = {}
 SUPPORTED_DEVICES[CHARGER_LAB_VENDOR_ID] = PowerZDevice;
 SUPPORTED_DEVICES[FNIRSI_VENDOR_ID] = FnirsiDevice;
 SUPPORTED_DEVICES[KINGMETER_VENDOR_ID] = KingMeterDevice;
+SUPPORTED_DEVICES[CHARGER_LAB_BLUE_VENDOR_ID] = PowerZBlueDevice;
 
 async function getDeviceName(device) {
   let manufacturer = await new Promise((resolve, reject) => {
