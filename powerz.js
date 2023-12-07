@@ -6,9 +6,11 @@ const { CRC } = require('crc-full');
 
 const CHARGER_LAB_VENDOR_ID = 0x5FC9;
 const FNIRSI_VENDOR_ID = 0x2E3C;
-const SHIZUKU_AND_FNIRSI_VENDOR_ID = 0x483;
+const KINGMETER_VENDOR_ID = 0x416;
+const GENERIC_VENDOR_ID = 0x483;
 const SHIZUKU_PRODUCT_IDS = [0xFFFF, 0xFFE, 0x374B];
 const FNIRSI_PRODUCT_IDS = [0x3A, 0x3B];
+const KINGMETER_PRODUCT_IDS = [0x5750, 0x5f50];
 
 const DEBUG = false;//true;
 const DEBUG_log = DEBUG ? console.log : () => {};
@@ -446,9 +448,121 @@ ShizukuDevice.prototype = {
   }
 };
 
+function KingMeterDevice(device) {
+}
+
+KingMeterDevice.prototype = {
+  COMMON_PREFIX: 0x55,
+
+  // The following 4 commands are sent by the original Windows software
+  // after finding the device.
+  // They don't seem to be needed to get samples, so they are probably used to
+  // retrieve data like the firmware version number.
+  //   [0x10, 0x02, 0x6a, 0x6d, 0xe9],
+  //   [0x10, 0x03, 0x6b, 0xac, 0x29],
+  //   [0x10, 0x04, 0x6c, 0xed, 0xeb],
+  //   [0x22, 0x80, 0xf1, 0x00, 0xed, 0x8e, 0x1e],
+
+  CMD_GET_200_SAMPLES: [0x22, 0x05, 0x0b, 0x00, 0x8c, 0xdd, 0x57],
+
+  // The name of these commands matches the label of the UI element in the
+  // original Windows software. The actual sampling rate they produce doesn't
+  // really match, and is indicated in the comments.
+  CMD_1000SPS:  [0x31, 0x1a, 0xb1, 0x01, 0x04, 0x5c, 0x34, 0xcb], // every 2ms
+  CMD_100SPS:   [0x31, 0x1a, 0xb1, 0x01, 0x03, 0x5b, 0x75, 0x09], // every 10ms
+  CMD_50SPS:    [0x31, 0x1a, 0xb1, 0x01, 0x02, 0x5a, 0xb4, 0xc9], // every 20ms
+  CMD_10SPS:    [0x31, 0x1a, 0xb1, 0x01, 0x01, 0x59, 0xf4, 0xc8], // every 100ms
+  CMD_1SPS:     [0x31, 0x1a, 0xb1, 0x01, 0x00, 0x58, 0x35, 0x08], // every 100ms
+
+  sendCommand(cmd) {
+    // All commands are sent in a 64 buffer. The first byte is always the same,
+    // the second byte seems to be the length of the command, and it is likely
+    // that the last 2 bytes are some form of checksum. I haven't identified
+    // the checksum algorithm, so the command arrays include the checksums.
+    var outData = new Array(64).fill(0);
+    outData[0] = this.COMMON_PREFIX;
+    outData[1] = cmd.length - 2;
+    for (let i = 0; i < cmd.length; ++i) {
+      outData[i + 2] = cmd[i];
+    }
+    return this.hidDevice.write(outData);
+  },
+
+  async startSampling() {
+    const {idVendor, idProduct} = this.device.deviceDescriptor;
+    this.hidDevice = new HID.HID(idVendor, idProduct);
+
+    this.hidDevice.on('data', data => {
+      // Only care about samples.
+      if (data[0] != 0xAA || data[1] != 0x25) {
+        return;
+      }
+
+      // All data packets seem to start with the same 6 bytes: aa 25 62 05 0b 01
+      // Example of the following data:
+      //   cd 27 4f 00  1d 21 03 00  0e 7a 0f 00  16 00 00 00  cc 00 00 00  82 27 4f 00  b7 4b 03 00  07 01  01
+      //   voltage1     current1     power        d+           d-           voltage2     current2     temp
+      //
+      // The voltage1/current1 and voltage2/current2 values don't match.
+      // There might be an input and output measurement.
+      // The power value matches neither v1 * c1 nor v2 * c2, but it is close.
+      // The meaning of the value in byte 37 is unknown. It seems to be sometimes
+      // 1, 2 or 4. Could be the charging protocol.
+      // Bytes 38-63 are always 0.
+      // Byte 64 contains another unknown value. It doesn't change enough
+      // between samples to feel like a checksum. It is 0x20 most of the time,
+      // but sometimes has other values (0, 1, 8, 0x21, 0x40, 0x61).
+      if (DEBUG) {
+        const sample = {
+          v1: data.readInt32LE(6) / 1e6,
+          v2: data.readInt32LE(26) / 1e6,
+          i1: data.readInt32LE(10) / 1e6,
+          i2: data.readInt32LE(30) / 1e6,
+          p: data.readInt32LE(14) / 1e6,
+          "d+": data.readInt32LE(18) / 1e3,
+          "d-": data.readInt32LE(22) / 1e3,
+          temp: data.readInt16LE(34) / 10,
+          unknown1: data[36],
+          unknown2: data[63],
+        };
+        console.log(sample);
+      }
+
+      addSample(this,
+                roundToNanoSecondPrecision(performance.now() - startPerformanceNow),
+                data.readInt32LE(14) / 1e6);
+    });
+    this.hidDevice.on('error', err => {
+      console.log("hid device error:", err);
+      clearInterval(this.timerId);
+    });
+
+    await this.sendCommand(this.CMD_1000SPS);
+
+    console.log("Sampling...");
+    this.timerId = setInterval(async () => {
+      if (gClosing) {
+        return;
+      }
+
+      try {
+        await this.sendCommand(this.CMD_GET_200_SAMPLES);
+      } catch(e) {
+        console.log("error sending command:", e);
+      }
+    }, 200); // The timer can be longer for slower sampling rates.
+  },
+
+  stopSampling() {
+    clearInterval(this.timerId);
+    this.hidDevice = null;
+  }
+};
+
 const SUPPORTED_DEVICES = {}
 SUPPORTED_DEVICES[CHARGER_LAB_VENDOR_ID] = PowerZDevice;
 SUPPORTED_DEVICES[FNIRSI_VENDOR_ID] = FnirsiDevice;
+SUPPORTED_DEVICES[KINGMETER_VENDOR_ID] = KingMeterDevice;
 
 async function getDeviceName(device) {
   let manufacturer = await new Promise((resolve, reject) => {
@@ -475,12 +589,14 @@ async function getDeviceName(device) {
 async function tryDevice(device) {
   const vendorId = device.deviceDescriptor.idVendor;
   let dev;
-  if (vendorId == SHIZUKU_AND_FNIRSI_VENDOR_ID) {
+  if (vendorId == GENERIC_VENDOR_ID) {
     const productId = device.deviceDescriptor.idProduct;
     if (SHIZUKU_PRODUCT_IDS.includes(productId)) {
       dev = new ShizukuDevice(device);
     } else if (FNIRSI_PRODUCT_IDS.includes(productId)) {
       dev = new FnirsiDevice(device);
+    } else if (KINGMETER_PRODUCT_IDS.includes(productId)) {
+      dev = new KingMeterDevice(device);
     }
   } else if (vendorId in SUPPORTED_DEVICES) {
     dev = new SUPPORTED_DEVICES[vendorId](device);
