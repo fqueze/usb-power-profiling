@@ -12,6 +12,7 @@ const GENERIC_VENDOR_ID = 0x483;
 const SHIZUKU_PRODUCT_IDS = [0xFFFF, 0xFFE, 0x374B];
 const FNIRSI_PRODUCT_IDS = [0x3A, 0x3B];
 const KINGMETER_PRODUCT_IDS = [0x5750, 0x5f50];
+const WITRN_VENDOR_ID = 0x716;
 
 const DEBUG = false;//true;
 const DEBUG_log = DEBUG ? console.log : () => {};
@@ -561,6 +562,7 @@ KingMeterDevice.prototype = {
 };
 
 function PowerZBlueDevice(device) {
+  // expected product id: 0x2
 }
 
 PowerZBlueDevice.prototype = {
@@ -614,11 +616,96 @@ PowerZBlueDevice.prototype = {
   }
 };
 
+function findVoltageOffset(data) {
+  var candidates = [
+    [offset => data.readInt32LE(offset) / 1e6, "Int32LE / 1e6"],
+    [offset => data.readInt32LE(offset) / 1e5, "Int32LE / 1e5"],
+    [offset => data.readInt32BE(offset) / 1e6, "Int32BE / 1e6"],
+    [offset => data.readInt32BE(offset) / 1e5, "Int32BE / 1e5"],
+    [offset => data.readFloatLE(offset), "FloatLE"],
+    [offset => data.readFloatBE(offset), "FloatBE"],
+  ];
+  for (let offset = 0; offset < data.length - 4; ++offset) {
+    for (let [fun, desc] of candidates) {
+      let val = fun(offset);
+      if (val > 5 && val < 5.5) {
+        console.log("Offset:", offset, val, desc);
+      }
+    }
+  }
+}
+
+function WitrnDevice(device) {
+}
+
+WitrnDevice.prototype = {
+  async startSampling() {
+    const {idVendor, idProduct} = this.device.deviceDescriptor;
+    this.hidDevice = new HID.HID(idVendor, idProduct);
+
+    let last = Date.now();
+    this.hidDevice.on('data', data => {
+      if (data[0] != 0xff || data[1] != 0x55) {
+        // All the data packets seem to start with 0xff 0x55.
+        DEBUG_log("ignoring unexpected packet", data[0], data[1]);
+        return;
+      }
+
+      const sum = array => array.reduce((acc, val) => acc + val);
+      const payloadChecksum = sum(data.slice(8, 62)) % 256;
+      const packetChecksum = (sum(data.slice(0, 8)) + payloadChecksum) % 256;
+      if (data[data.length - 2] != payloadChecksum ||
+          data[data.length - 1] != packetChecksum) {
+        console.log(data.toString("hex"),
+                    "Invalid checksums:", [data[data.length - 2], data[data.length - 1]],
+                    "computed:", [payloadChecksum, packetChecksum]);
+        return;
+      }
+
+      const v = data.readFloatLE(46);
+      const i = data.readFloatLE(50);
+      if (DEBUG) {
+        const sample = {
+          v,
+          i,
+          "d-": data.readFloatLE(34),
+          "d+": data.readFloatLE(30),
+          time: data.readUInt32LE(26),    // time in seconds since the meter started.
+          rectime: data.readUInt32LE(22), // time in seconds displayed as 'rec' on the device
+          wh: data.readFloatLE(18),
+          ah: data.readFloatLE(14),
+          unknown0: data.slice(4, 8),     // changes a lot. No idea what it could be.
+          unknown1: data.slice(10, 14),   // Very stable, or even constant.
+          unknown2: data.readFloatLE(38), // Always 25
+          unknown3: data.readFloatLE(42), // -73.<something that changes all the time>
+          time_ms: data.readUInt16BE(2),  // seems to be a counter in ms, but
+                                          // sometimes goes backwards by 246.
+        };
+        console.log(sample);
+      }
+
+      addSample(this,
+                roundToNanoSecondPrecision(performance.now() - startPerformanceNow),
+                v * i);
+    });
+    this.hidDevice.on('error', err => {
+      console.log("hid device error:", err);
+    });
+    console.log("Sampling...");
+  },
+
+  stopSampling() {
+    this.hidDevice = null;
+  }
+};
+
+
 const SUPPORTED_DEVICES = {}
 SUPPORTED_DEVICES[CHARGER_LAB_VENDOR_ID] = PowerZDevice;
 SUPPORTED_DEVICES[FNIRSI_VENDOR_ID] = FnirsiDevice;
 SUPPORTED_DEVICES[KINGMETER_VENDOR_ID] = KingMeterDevice;
 SUPPORTED_DEVICES[CHARGER_LAB_BLUE_VENDOR_ID] = PowerZBlueDevice;
+SUPPORTED_DEVICES[WITRN_VENDOR_ID] = WitrnDevice;
 
 async function getDeviceName(device) {
   let manufacturer = await new Promise((resolve, reject) => {
@@ -662,7 +749,9 @@ async function tryDevice(device) {
     try {
       device.open();
       dev.deviceName = await getDeviceName(device);
-      console.log("Found device:", dev.deviceName);
+      console.log("Found device:", dev.deviceName,
+                  "Vendor Id: 0x" + vendorId.toString(16),
+                  "Product Id: 0x" + device.deviceDescriptor.idProduct.toString(16));
       dev.device = device;
       dev.samples = [];
       dev.sampleTimes = [];
@@ -674,7 +763,10 @@ async function tryDevice(device) {
   } else if (DEBUG) {
     try {
       device.open();
-      console.log("found unknown device:", await getDeviceName(device), device);
+      console.log("found unknown device:", await getDeviceName(device),
+                  "Vendor Id: 0x" + device.deviceDescriptor.idVendor.toString(16),
+                  "Product Id: 0x" + device.deviceDescriptor.idProduct.toString(16),
+                  device);
       device.close();
     } catch(e) { console.log(e); }
   }
