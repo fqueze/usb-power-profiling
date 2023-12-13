@@ -304,7 +304,7 @@ ShizukuDevice.prototype = {
 
   samplingRequestId: -1,
   initialTimeStamp: 0,
-  initialNow: 0,
+  initialPerformanceNow: 0,
   _pendingData: null,
   ondata(data) {
     if (this._pendingData) {
@@ -643,7 +643,9 @@ WitrnDevice.prototype = {
     const {idVendor, idProduct} = this.device.deviceDescriptor;
     this.hidDevice = new HID.HID(idVendor, idProduct);
 
-    let last = Date.now();
+    let initialTimeStamp = 0, initialPerformanceNow = 0;
+    let timestampWrapArounds = 0;
+    let lastTime_s = 0;
     this.hidDevice.on('data', data => {
       if (data[0] != 0xff || data[1] != 0x55) {
         // All the data packets seem to start with 0xff 0x55.
@@ -664,8 +666,24 @@ WitrnDevice.prototype = {
 
       const v = data.readFloatLE(46);
       const i = data.readFloatLE(50);
+
+      const time_s = data[2];  // time in seconds, on a single byte (ie. % 256)
+      const time_ms = data[3]; // time in ms, on a single byte (ie. % 256)
+      // data[4]: time_ms / 30
+      // data[5]: time_ms / 100
+      const time_ms_mod100 = data[6]; // time in ms, % 100
+      // data[7]: time_ms / 80
+      if (time_s < 10 && lastTime_s > 250) {
+        ++timestampWrapArounds;
+      }
+      const timestamp =
+        (time_s + timestampWrapArounds * 256) * 1000 +
+        [0, 1, 2, 3].map(i =>  (256 * i + time_ms) % 1000).find(ms => ms % 100 == time_ms_mod100);
+      lastTime_s = time_s;
+
       if (DEBUG) {
         const sample = {
+          timestamp,
           v,
           i,
           "d-": data.readFloatLE(34),
@@ -674,19 +692,20 @@ WitrnDevice.prototype = {
           rectime: data.readUInt32LE(22), // time in seconds displayed as 'rec' on the device
           wh: data.readFloatLE(18),
           ah: data.readFloatLE(14),
-          unknown0: data.slice(4, 8),     // changes a lot. No idea what it could be.
           unknown1: data.slice(10, 14),   // Very stable, or even constant.
           unknown2: data.readFloatLE(38), // Always 25
           unknown3: data.readFloatLE(42), // -73.<something that changes all the time>
-          time_ms: data.readUInt16BE(2),  // seems to be a counter in ms, but
-                                          // sometimes goes backwards by 246.
         };
         console.log(sample);
       }
 
-      addSample(this,
-                roundToNanoSecondPrecision(performance.now() - startPerformanceNow),
-                v * i);
+      if (!initialTimeStamp) {
+        initialTimeStamp = timestamp;
+        initialPerformanceNow = performance.now() - startPerformanceNow;
+      }
+      const time =
+        initialPerformanceNow + Number(timestamp - initialTimeStamp);
+      addSample(this, roundToNanoSecondPrecision(time), v * i);
     });
     this.hidDevice.on('error', err => {
       console.log("hid device error:", err);
