@@ -454,39 +454,46 @@ function KingMeterDevice(device) {
 }
 
 KingMeterDevice.prototype = {
+  _crc: CRC.default("CRC16_MODBUS"),
   COMMON_PREFIX: 0x55,
 
   // The following 4 commands are sent by the original Windows software
   // after finding the device.
   // They don't seem to be needed to get samples, so they are probably used to
   // retrieve data like the firmware version number.
-  //   [0x10, 0x02, 0x6a, 0x6d, 0xe9],
-  //   [0x10, 0x03, 0x6b, 0xac, 0x29],
-  //   [0x10, 0x04, 0x6c, 0xed, 0xeb],
-  //   [0x22, 0x80, 0xf1, 0x00, 0xed, 0x8e, 0x1e],
+  //   [0x10, 0x02],
+  //   [0x10, 0x03],
+  //   [0x10, 0x04],
+  //   [0x22, 0x80, 0xf1, 0x00],
 
-  CMD_GET_200_SAMPLES: [0x22, 0x05, 0x0b, 0x00, 0x8c, 0xdd, 0x57],
+  CMD_GET_200_SAMPLES: [0x22, 0x05, 0x0b, 0x00],
 
   // The name of these commands matches the label of the UI element in the
   // original Windows software. The actual sampling rate they produce doesn't
   // really match, and is indicated in the comments.
-  CMD_1000SPS:  [0x31, 0x1a, 0xb1, 0x01, 0x04, 0x5c, 0x34, 0xcb], // every 2ms
-  CMD_100SPS:   [0x31, 0x1a, 0xb1, 0x01, 0x03, 0x5b, 0x75, 0x09], // every 10ms
-  CMD_50SPS:    [0x31, 0x1a, 0xb1, 0x01, 0x02, 0x5a, 0xb4, 0xc9], // every 20ms
-  CMD_10SPS:    [0x31, 0x1a, 0xb1, 0x01, 0x01, 0x59, 0xf4, 0xc8], // every 100ms
-  CMD_1SPS:     [0x31, 0x1a, 0xb1, 0x01, 0x00, 0x58, 0x35, 0x08], // every 100ms
+  CMD_1000SPS:  [0x31, 0x1a, 0xb1, 0x01, 0x04], // every 2ms
+  CMD_100SPS:   [0x31, 0x1a, 0xb1, 0x01, 0x03], // every 10ms
+  CMD_50SPS:    [0x31, 0x1a, 0xb1, 0x01, 0x02], // every 20ms
+  CMD_10SPS:    [0x31, 0x1a, 0xb1, 0x01, 0x01], // every 100ms
+  CMD_1SPS:     [0x31, 0x1a, 0xb1, 0x01, 0x00], // every 100ms
 
   sendCommand(cmd) {
     // All commands are sent in a 64 buffer. The first byte is always the same,
-    // the second byte seems to be the length of the command, and it is likely
-    // that the last 2 bytes are some form of checksum. I haven't identified
-    // the checksum algorithm, so the command arrays include the checksums.
+    // the second byte seems to be the length of the command, then there's a
+    // simple checksum on one byte followed by a CRC16.
     var outData = new Array(64).fill(0);
-    outData[0] = this.COMMON_PREFIX;
-    outData[1] = cmd.length - 2;
-    for (let i = 0; i < cmd.length; ++i) {
-      outData[i + 2] = cmd[i];
+    let i = 0;
+    outData[i++] = this.COMMON_PREFIX;
+    outData[i++] = cmd.length + 1;
+    while (i < cmd.length + 2) {
+      outData[i] = cmd[i - 2];
+      ++i;
     }
+    let array = outData.slice(0, i);
+    outData[i++] = array.reduce((a,b) => (a + b) & 0xff);
+    let checksum = this._crc.compute(array);
+    outData[i++] = checksum & 0xff;
+    outData[i] = checksum >> 8;
     return this.hidDevice.write(outData);
   },
 
