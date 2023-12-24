@@ -2,6 +2,8 @@ const { usb, getDeviceList } = require('usb');
 const HID = require('node-hid');
 const http = require('http');
 const url = require('url');
+const { createDecipheriv } = require('node:crypto');
+const { SerialPort } = require('serialport');
 const { CRC } = require('crc-full');
 
 const CHARGER_LAB_VENDOR_ID = 0x5FC9;
@@ -13,6 +15,7 @@ const SHIZUKU_PRODUCT_IDS = [0xFFFF, 0xFFFE, 0x374B];
 const FNIRSI_PRODUCT_IDS = [0x3A, 0x3B];
 const KINGMETER_PRODUCT_IDS = [0x5750, 0x5f50];
 const WITRN_VENDOR_ID = 0x716;
+const RUIDENG_VENDOR_ID = 0x28e9;
 
 const DEBUG = false;//true;
 const DEBUG_log = DEBUG ? console.log : () => {};
@@ -725,6 +728,126 @@ WitrnDevice.prototype = {
   }
 };
 
+function RuiDengDevice(device) {
+}
+
+RuiDengDevice.prototype = {
+  _crc: CRC.default("CRC16_MODBUS"),
+  checksum(data) { return this._crc.compute(data.slice(0,60)); },
+  _key: Buffer.from([
+        88, 33, -6, 86, 1, -78, -16, 38,
+        -121, -1, 18, 4, 98, 42, 79, -80,
+        -122, -12, 2, 96, -127, 111, -102, 11,
+        -89, -15, 6, 97, -102, -72, 114, -120
+  ]),
+  requestSample() {
+    this._lastSampleRequestTime = Date.now();
+    this.serialDevice.write("getva");
+  },
+  ondata(data) {
+    let buf = this.decipher.update(data);
+    if (buf.length < 64) {
+      console.log("received data is too short", buf.length, buf);
+      return;
+    }
+
+    if (this.checksum(buf) != buf.readUInt32LE(60)) {
+      console.log(buf.toString("hex"),
+                  "Invalid CRC:", buf.readUInt32LE(60), "computed:",
+                  this.checksum(buf));
+      return;
+    }
+
+    let prefix = buf.slice(0, 4).toString('ascii');
+    if (prefix == 'pac1') {
+      let power = buf.readUInt32LE(56) * 1e-4;
+      addSample(this,
+                roundToNanoSecondPrecision(performance.now() - startPerformanceNow),
+                power);
+      if (DEBUG) {
+        let sample = {
+          productName: buf.slice(4, 8).toString('ascii'),
+          version: buf.slice(8, 12).toString('ascii'),
+          serialNumber: buf.readUInt32LE(12),
+          unknown: buf.slice(16, 44),
+          sessionCount: buf.readUInt32LE(44),
+          voltage: buf.readUInt32LE(48) * 1e-4,
+          current: buf.readUInt32LE(52) * 1e-5,
+          power
+        };
+        console.log(sample);
+      }
+    } else if (prefix == 'pac2') {
+      if (DEBUG) {
+        let sample = {
+          temperature: buf.readUInt32LE(28),
+          resistance: buf.readUInt32LE(4) * 1e-1,
+          'd+': buf.readUInt32LE(32) * 1e-2,
+          'd-': buf.readUInt32LE(36) * 1e-2,
+        };
+        if (buf.readUInt32LE(28) == 1) {
+          sample.temperature *= -1;
+        }
+        console.log(sample);
+      }
+    } else if (prefix == 'pac3') {
+      if (DEBUG) {
+        // Always 0, print debug message if a non-zero value is present.
+        let allZero = true;
+        for (let i = 4; i < 60; ++i) {
+          if (buf[i] != 0) {
+            console.log("pac3 was expected to be all zero, but found data:",
+                        buf.slice(4, 60).toString('hex'));
+            break;
+          }
+        }
+      }
+      this.requestSample();
+    } else {
+      console.log("unknown data packet:", buf.toString('hex'));
+    }
+  },
+  async startSampling() {
+    let serialDevices = (await SerialPort.list()).filter(d => d.manufacturer == "RuiDeng");
+    if (!serialDevices.length) {
+      console.log("serial device not found");
+      return;
+    }
+    DEBUG_log("Found serial devices", serialDevices);
+    this.decipher = createDecipheriv("AES-256-ECB", this._key, null);
+    this.decipher.setAutoPadding(false);
+    this.serialDevice = new SerialPort({path: serialDevices[0].path, baudRate: 115200});
+    await new Promise((resolve, reject) => this.serialDevice.on("open", err => {
+      if (err) {
+        reject("error opening serial port:" + err);
+      } else {
+        resolve();
+      }
+    }));
+
+    this.serialDevice.flush(); // discard pending data
+    this.serialDevice.on("error", console.log);
+    this.serialDevice.on("data", data => { this.ondata(data); });
+
+    this.requestSample();
+    this.interval = setInterval(() => {
+      let lastSampleAge = Date.now() - this._lastSampleRequestTime;
+      if (lastSampleAge > 200) {
+        DEBUG_log("The last sample is too old (" + lastSampleAge +
+                  "ms), restarting sampling.");
+        this.requestSample();
+      }
+    }, 100);
+    console.log("Sampling...");
+  },
+
+  stopSampling() {
+    clearInterval(this.interval);
+    this.decipher = null;
+    this.serialDevice.close();
+    this.serialDevice = null;
+  }
+};
 
 const SUPPORTED_DEVICES = {}
 SUPPORTED_DEVICES[CHARGER_LAB_VENDOR_ID] = PowerZDevice;
@@ -732,6 +855,7 @@ SUPPORTED_DEVICES[FNIRSI_VENDOR_ID] = FnirsiDevice;
 SUPPORTED_DEVICES[KINGMETER_VENDOR_ID] = KingMeterDevice;
 SUPPORTED_DEVICES[CHARGER_LAB_BLUE_VENDOR_ID] = PowerZBlueDevice;
 SUPPORTED_DEVICES[WITRN_VENDOR_ID] = WitrnDevice;
+SUPPORTED_DEVICES[RUIDENG_VENDOR_ID] = RuiDengDevice;
 
 async function getDeviceName(device) {
   let manufacturer = await new Promise((resolve, reject) => {
