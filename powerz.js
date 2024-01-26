@@ -26,6 +26,10 @@ const gDevices = [];
 var startTime, startPerformanceNow;
 var gClosing;
 
+function LogSampling() {
+  console.log(new Date(), "Sampling...");
+}
+
 function roundToNanoSecondPrecision(timeMs) {
   return Math.round(timeMs * 1e6) / 1e6;
 }
@@ -135,7 +139,7 @@ PowerZDevice.prototype = {
       return;
     }
 
-    console.log("Sampling...");
+    LogSampling();
     let previousW = 0;
     let w = 0;
     this.interval = setInterval(async () => {
@@ -252,7 +256,7 @@ FnirsiDevice.prototype = {
     });
 
     await this.sendCommand(this.CMD_START_SAMPLING);
-    console.log("Sampling...");
+    LogSampling();
 
     this.timerId = setInterval(async () => {
       if (gClosing) {
@@ -432,7 +436,7 @@ ShizukuDevice.prototype = {
     this.samplingRequestId = this.lastRequestId;
     await this.sendCommand(this.CMD_START_SAMPLING,
                            int32Bytes(this.samplingInterval));
-    console.log("Sampling...");
+    LogSampling();
   },
 
   async stopSampling() {
@@ -551,7 +555,7 @@ KingMeterDevice.prototype = {
 
     await this.sendCommand(this.CMD_1000SPS);
 
-    console.log("Sampling...");
+    LogSampling();
     this.timerId = setInterval(async () => {
       if (gClosing) {
         return;
@@ -618,7 +622,7 @@ PowerZBlueDevice.prototype = {
     this.hidDevice.on('error', err => {
       console.log("hid device error:", err);
     });
-    console.log("Sampling...");
+    LogSampling();
   },
 
   stopSampling() {
@@ -720,7 +724,7 @@ WitrnDevice.prototype = {
     this.hidDevice.on('error', err => {
       console.log("hid device error:", err);
     });
-    console.log("Sampling...");
+    LogSampling();
   },
 
   stopSampling() {
@@ -838,7 +842,7 @@ RuiDengDevice.prototype = {
         this.requestSample();
       }
     }, 100);
-    console.log("Sampling...");
+    LogSampling();
   },
 
   stopSampling() {
@@ -899,7 +903,8 @@ async function tryDevice(device) {
     try {
       device.open();
       dev.deviceName = await getDeviceName(device);
-      console.log("Found device:", dev.deviceName,
+      console.log(new Date(),
+                  "Found device:", dev.deviceName,
                   "Vendor Id: 0x" + vendorId.toString(16),
                   "Product Id: 0x" + device.deviceDescriptor.idProduct.toString(16));
       dev.device = device;
@@ -913,7 +918,8 @@ async function tryDevice(device) {
   } else if (DEBUG) {
     try {
       device.open();
-      console.log("found unknown device:", await getDeviceName(device),
+      console.log(new Date(),
+                  "found unknown device:", await getDeviceName(device),
                   "Vendor Id: 0x" + device.deviceDescriptor.idVendor.toString(16),
                   "Product Id: 0x" + device.deviceDescriptor.idProduct.toString(16),
                   device);
