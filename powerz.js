@@ -1055,7 +1055,6 @@ function profileFromData() {
   if (!gDevices.length) {
     throw "No device is being sampled";
   }
-  const dev = gDevices[gDevices.length - 1]; //TODO: include data for all devices
 
   let profile = JSON.parse(baseProfile);
   profile.meta.startTime = startTime;
@@ -1063,37 +1062,30 @@ function profileFromData() {
   profile.meta.physicalCPUs = 1;
   profile.meta.CPUName = gDevices.map(d => d.deviceName).join(", ");
 
-  const sampleTimes = dev.sampleTimes;
-  let zeros = new Array(sampleTimes.length).fill(0);
+  const threadSampleTimes = [].concat(...gDevices.map(dev => dev.sampleTimes));
+  let zeros = new Array(threadSampleTimes.length).fill(0);
   let firstThread = profile.threads[0];
   let threadSamples = firstThread.samples;
   threadSamples.eventDelay = zeros;
   threadSamples.stack = zeros;
-  threadSamples.time = sampleTimes;
-  threadSamples.length = sampleTimes.length;
+  threadSamples.time = threadSampleTimes;
+  threadSamples.length = threadSampleTimes.length;
 
   firstThread.stringArray = ["(root)"];
 
-  const counters = [
-    {
-      name: "USB power",
-      description: dev.deviceName,
-      fun: i => dev.samples[i],
-    },
-  ];
-
-  let timeInterval = i => i == 0 ? 1 : (sampleTimes[i] - sampleTimes[i - 1]) / 1000;
-  for (let {name, description, fun} of counters) {
+  for (let dev of gDevices) {
+    let {deviceName, sampleTimes} = dev;
+    let timeInterval = i => i == 0 ? 1 : (sampleTimes[i] - sampleTimes[i - 1]) / 1000;
     let samples = [];
     for (let i = 0; i < sampleTimes.length; ++i) {
-      let sample = fun(i);
+      let sample = dev.samples[i];
       let interval = timeInterval(i);
       samples.push(Math.max(0, Math.round(WattSecondToPicoWattHour(sample) * interval)));
     }
     if (!samples.some(s => s > 0)) {
       continue;
     }
-    profile.counters.push(counterObject(name, description, sampleTimes, samples));
+    profile.counters.push(counterObject("USB power", deviceName, sampleTimes, samples));
   }
 
   return profile;
