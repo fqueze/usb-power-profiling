@@ -1020,15 +1020,10 @@ function counterObject(name, description, times, samples, geckoFormat = false) {
     for (let i = 0; i < time.length; ++i) {
       data.push([time[i], count[i]]);
     }
-    rv.sample_groups = [
-      {
-        id:0,
-        samples: {
-          schema: {time:0, count:1},
-          data
-        }
-      }
-    ];
+    rv.samples = {
+      schema: {time:0, count:1},
+      data
+    };
   } else {
     rv.pid = "0";
     rv.mainThreadIndex = 0;
