@@ -1138,6 +1138,17 @@ const app = (req, res) => {
     }
     return;
   }
+
+  // This is for debugging USB error recovery: GET /wait?time=200 blocks the
+  // main thread for 200ms, during which no USB data is processed.
+  if (req.url.startsWith("/wait")) {
+    const waitTime = url.parse(req.url, true).query.time || 500;
+    let startTime = Date.now();
+    while (Date.now() - startTime < waitTime)
+      ;
+    sendError(res, 'wait: ' + (Date.now() - startTime));
+    return;
+  }
 };
 
 const server = http.createServer(app)
