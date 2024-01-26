@@ -2,7 +2,7 @@ Make the data from USB power meters usable in the Firefox Profiler.
 
 # Usage
 
-Running `node powerz.js` will start a server on `localhost:2121`.
+Running `node usb-power-profiling.js` will start a server on `localhost:2121`.
 
 ## External power profiling in the Firefox Profiler
 In Firefox 121 or later:
