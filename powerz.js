@@ -411,6 +411,11 @@ ShizukuDevice.prototype = {
   async startSampling() {
     try {
       await resetDevice(this.device);
+    } catch(e) {
+      // resetDevice already logs the error.
+    }
+
+    try {
       [this.endPointIn, this.endPointOut] = findBulkInOutEndPoints(this.device);
     } catch(e) {
       console.log(e);
@@ -424,10 +429,13 @@ ShizukuDevice.prototype = {
     // When sampling every 1ms, the default of keeping 3 data blocks pending
     // in the kernel is not enough, as it's easy for our thread to be blocked
     // for more than 3ms.
-    this.endPointIn.startPoll(150);
+    // 1024 is the maximum and allows us to recover if the main thread was
+    // blocked up to about 1.8s.
+    this.endPointIn.startPoll(1024);
     this.endPointIn.on('data', data => this.ondata(data))
     this.endPointIn.on('error', err => {
       console.log("Error:", err);
+      this.endPointOut = null;
     });
 
     DEBUG_log("sending CMD_STOP before we start sampling");
@@ -954,7 +962,10 @@ process.on('SIGINT', async function() {
 
 startSampling().then(() => {});
 
-usb.on('attach', tryDevice);
+usb.on('attach', device => {
+  console.log(new Date(), "Device attached");
+  tryDevice(device);
+});
 usb.on('detach', function(device) {
   if (!(device.deviceDescriptor.idVendor in SUPPORTED_DEVICES)) {
     return;
@@ -1044,7 +1055,7 @@ function profileFromData() {
   if (!gDevices.length) {
     throw "No device is being sampled";
   }
-  const dev = gDevices[0]; //TODO: include data for all devices
+  const dev = gDevices[gDevices.length - 1]; //TODO: include data for all devices
 
   let profile = JSON.parse(baseProfile);
   profile.meta.startTime = startTime;
@@ -1104,7 +1115,7 @@ const app = (req, res) => {
     }
 
     //TODO: include data for all devices
-    const {samples, sampleTimes, deviceName} = gDevices[0];
+    const {samples, sampleTimes, deviceName} = gDevices[gDevices.length - 1];
 
     let timeStart = parseFloat(query.start) - startTime;
     let startIndex = 0;
