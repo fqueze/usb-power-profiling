@@ -1,4 +1,7 @@
 {
+  "scripts": {
+    "start": "npx nodemon usb-power-profiling.js"
+  },
   "dependencies": {
     "crc-full": "^1.1.0",
     "node-hid": "^3.0.0",
