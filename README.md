@@ -36,6 +36,7 @@ The example profiles are taken using a USB light, first keeping the light off fo
 |FNIRSI|FNB48S|https://share.firefox.dev/3RjtVTl|10ms|Significant power use changes are smoothed over 120ms.|
 |RuiDeng|TC66C|https://share.firefox.dev/3v4AvFV|80ms|Sampling rate depends on how much data is displayed on the power meter's screen. With the full display, 100ms is the minimum interval between samples. With only the main 3 values displayed, 90ms is in the minimum between samples, with a static screen (eg. settings) the minimum interval is 80ms. Significant power changes take up to [500ms to stabilize](https://share.firefox.dev/48w6Hkc) (with a few samples showing only a part of the change).|
 |WITRN|C5|https://share.firefox.dev/41nqAaQ|10ms|Samples contain timestamps in ms.|
+|ATORCH|ACD15P|https://share.firefox.dev/3SIWpGS|1s|Very low sampling rate.|
 ## Power meters likely to work
 Compatibility with these devices has not been verified, but they are likely to either "just work", or work with a trivial adjustment to the code (eg. tweak a USB product id).
 |Brand|Model|Notes|
@@ -51,3 +52,4 @@ Compatibility with these devices has not been verified, but they are likely to e
 |WITRN|U3|Expected to use the same protocol as the C5.|
 |WITRN|U3L|Expected to use the same protocol as the C5.|
 |WITRN|C4 / C4L|Expected to be the same as the C5 with lower data precision.|
+|ATORCH|C13P|Expected to be the same as the ACD15P.|

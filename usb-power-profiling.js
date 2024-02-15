@@ -481,7 +481,8 @@ KingMeterDevice.prototype = {
   //   [0x10, 0x04],
   //   [0x22, 0x80, 0xf1, 0x00],
 
-  CMD_GET_200_SAMPLES: [0x22, 0x05, 0x0b, 0x00],
+  // Will get 200 samples on the KingMeter, and only one on Atorch devices.
+  CMD_GET_SAMPLES: [0x22, 0x05, 0x0b, 0x00],
 
   // The name of these commands matches the label of the UI element in the
   // original Windows software. The actual sampling rate they produce doesn't
@@ -506,62 +507,95 @@ KingMeterDevice.prototype = {
     }
     let array = outData.slice(0, i);
     outData[i++] = array.reduce((a,b) => (a + b) & 0xff);
-    let checksum = this._crc.compute(array);
-    outData[i++] = checksum & 0xff;
-    outData[i] = checksum >> 8;
+    if (this.isAtorch) {
+      outData[i++] = 0xee;
+      outData[i] = 0xff;
+    } else {
+      let checksum = this._crc.compute(array);
+      outData[i++] = checksum & 0xff;
+      outData[i] = checksum >> 8;
+    }
     return this.hidDevice.write(outData);
   },
 
   async startSampling() {
     const {idVendor, idProduct} = this.device.deviceDescriptor;
     this.hidDevice = new HID.HID(idVendor, idProduct);
+    this.isAtorch = ["ACD15P", "C13P"].some(str => this.deviceName.includes(str));
 
     this.hidDevice.on('data', data => {
       // Only care about samples.
-      if (data[0] != 0xAA || data[1] != 0x25) {
+      if (data[0] != 0xAA || data[1] != (this.isAtorch ? 0x40 : 0x25)) {
+        DEBUG_log("got unrecognized data", data.toString('hex'));
+        // The KingMeter periodically sends the aa 40 62 05 0b prefix followed
+        // by 25 nul bytes, 31 bytes of unknown data and 3 more nul bytes.
         return;
       }
 
-      // All data packets seem to start with the same 6 bytes: aa 25 62 05 0b 01
-      // Example of the following data:
-      //   cd 27 4f 00  1d 21 03 00  0e 7a 0f 00  16 00 00 00  cc 00 00 00  82 27 4f 00  b7 4b 03 00  07 01  01
-      //   voltage1     current1     power        d+           d-           voltage2     current2     temp
-      //
-      // The voltage1/current1 and voltage2/current2 values don't match.
-      // There might be an input and output measurement.
-      // The power value matches neither v1 * c1 nor v2 * c2, but it is close.
-      // The meaning of the value in byte 37 is unknown. It seems to be sometimes
-      // 1, 2 or 4. Could be the charging protocol.
-      // Bytes 38-63 are always 0.
-      // Byte 64 contains another unknown value. It doesn't change enough
-      // between samples to feel like a checksum. It is 0x20 most of the time,
-      // but sometimes has other values (0, 1, 8, 0x21, 0x40, 0x61).
       if (DEBUG) {
-        const sample = {
-          v1: data.readInt32LE(6) / 1e6,
-          v2: data.readInt32LE(26) / 1e6,
-          i1: data.readInt32LE(10) / 1e6,
-          i2: data.readInt32LE(30) / 1e6,
-          p: data.readInt32LE(14) / 1e6,
-          "d+": data.readInt32LE(18) / 1e3,
-          "d-": data.readInt32LE(22) / 1e3,
-          temp: data.readInt16LE(34) / 10,
-          unknown1: data[36],
-          unknown2: data[63],
-        };
+        let sample;
+        if (this.isAtorch) {
+          // First 8 bytes seem constant: aa 40 62 05 0b 00 eb 01
+          // Example of the following data:
+          //   c6 a6 4f 00  35 0f 01 00  b6 87 05 00  8f 23 00 00  39 16 00 00  cb 2d 0d 00  52 75 32 00  90 d9 b7 01
+          //   voltage      current      power        d+           d-           cc1          cc2          temp
+          //   e89f87020000900a0000fc714e00010000002a0100000100
+          //   Unknown data at bytes 40-64, seems constant or almost constant.
+          sample = {
+            v: data.readInt32LE(8) / 1e6,
+            i: data.readInt32LE(12) / 1e6,
+            p: data.readInt32LE(16) / 1e6,
+            "d+": data.readInt32LE(20) / 1e6,
+            "d-": data.readInt32LE(24) / 1e6,
+            "cc1": data.readInt32LE(28) / 1e6,
+            "cc2": data.readInt32LE(32) / 1e6,
+            temp: data.readInt32LE(36) / 1e6,
+            unknown: data.slice(40),
+          };
+        } else {
+          // All data packets seem to start with the same 6 bytes: aa 25 62 05 0b 01
+          // Example of the following data:
+          //   cd 27 4f 00  1d 21 03 00  0e 7a 0f 00  16 00 00 00  cc 00 00 00  82 27 4f 00  b7 4b 03 00  07 01  01
+          //   voltage1     current1     power        d+           d-           voltage2     current2     temp
+          //
+          // The voltage1/current1 and voltage2/current2 values don't match.
+          // There might be an input and output measurement.
+          // The power value matches neither v1 * c1 nor v2 * c2, but it is close.
+          // The meaning of the value in byte 37 is unknown. It seems to be sometimes
+          // 1, 2 or 4. Could be the charging protocol.
+          // Bytes 38-63 are always 0.
+          // Byte 64 contains another unknown value. It doesn't change enough
+          // between samples to feel like a checksum. It is 0x20 most of the time,
+          // but sometimes has other values (0, 1, 8, 0x21, 0x40, 0x61).
+          sample = {
+            v1: data.readInt32LE(6) / 1e6,
+            v2: data.readInt32LE(26) / 1e6,
+            i1: data.readInt32LE(10) / 1e6,
+            i2: data.readInt32LE(30) / 1e6,
+            p: data.readInt32LE(14) / 1e6,
+            "d+": data.readInt32LE(18) / 1e3,
+            "d-": data.readInt32LE(22) / 1e3,
+            temp: data.readInt16LE(34) / 10,
+            unknown1: data[36],
+            unknown2: data[63],
+          };
+        }
         console.log(sample);
       }
 
       addSample(this,
                 roundToNanoSecondPrecision(performance.now() - startPerformanceNow),
-                data.readInt32LE(14) / 1e6);
+                data.readInt32LE(this.isAtorch ? 16 : 14) / 1e6);
     });
     this.hidDevice.on('error', err => {
       console.log("hid device error:", err);
       clearInterval(this.timerId);
     });
 
-    await this.sendCommand(this.CMD_1000SPS);
+    if (!this.isAtorch) {
+      await this.sendCommand(this.CMD_1000SPS);
+    }
+    await this.sendCommand(this.CMD_GET_SAMPLES);
 
     LogSampling();
     this.timerId = setInterval(async () => {
@@ -570,11 +604,12 @@ KingMeterDevice.prototype = {
       }
 
       try {
-        await this.sendCommand(this.CMD_GET_200_SAMPLES);
+        await this.sendCommand(this.CMD_GET_SAMPLES);
       } catch(e) {
         console.log("error sending command:", e);
       }
-    }, 200); // The timer can be longer for slower sampling rates.
+    }, this.isAtorch ? 1000
+                     : 200); // The timer can be longer for slower sampling rates.
   },
 
   stopSampling() {
