@@ -949,12 +949,27 @@ async function tryDevice(device) {
       console.log(new Date(),
                   "Found device:", dev.deviceName,
                   "Vendor Id: 0x" + vendorId.toString(16),
-                  "Product Id: 0x" + device.deviceDescriptor.idProduct.toString(16));
+                  "Product Id: 0x" + device.deviceDescriptor.idProduct.toString(16),
+                  `Address: ${device.busNumber}:${device.deviceAddress}`);
       dev.device = device;
-      dev.samples = [];
-      dev.sampleTimes = [];
+
+      let existingDeviceIndex =
+        gDevices.findIndex(d => device.busNumber == d.device.busNumber &&
+                           device.deviceAddress == d.device.deviceAddress &&
+                           device.deviceDescriptor.idVendor == device.deviceDescriptor.idVendor &&
+                           device.deviceDescriptor.idProduct == device.deviceDescriptor.idProduct);
+      if (existingDeviceIndex != -1) {
+        let existingDev = gDevices[existingDeviceIndex];
+        dev.samples = existingDev.samples;
+        dev.sampleTimes = existingDev.sampleTimes;
+        gDevices[existingDeviceIndex] = dev;
+      } else {
+        dev.samples = [];
+        dev.sampleTimes = [];
+        gDevices.push(dev);
+      }
+
       await dev.startSampling();
-      gDevices.push(dev);
     } catch(e) {
       console.log(e);
     }
@@ -1098,6 +1113,7 @@ function profileFromData() {
   profile.meta.CPUName = gDevices.map(d => d.deviceName).join(", ");
 
   const threadSampleTimes = [].concat(...gDevices.map(dev => dev.sampleTimes));
+  threadSampleTimes.sort((a, b) => a - b);
   let zeros = new Array(threadSampleTimes.length).fill(0);
   let firstThread = profile.threads[0];
   let threadSamples = firstThread.samples;
