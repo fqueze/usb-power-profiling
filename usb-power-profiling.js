@@ -80,6 +80,16 @@ function findBulkInOutEndPoints(device) {
       }
       if (endPoint.direction == "out" && !endPointOut) {
         endPointOut = endPoint;
+        if (interface.isKernelDriverActive()) {
+          try {
+            // Only required on linux to be able to claim
+            // the interface, otherwise a LIBUSB_ERROR_BUSY error
+            // is thrown
+            interface.detachKernelDriver();
+          } catch (e) {
+            // Throws failure on non-linux platforms
+          }
+        }
         if (!claimed) {
           claimed = true;
           interface.claim();
