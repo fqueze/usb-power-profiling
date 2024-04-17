@@ -1,8 +1,15 @@
 Make the data from USB power meters usable in the Firefox Profiler.
 
-# Usage
+# Quick start
+The following instructions will start a server on `localhost:2121`.
+```
+git clone https://github.com/fqueze/usb-power-profiling.git
+cd usb-power-profiling
+npm i
+node usb-power-profiling.js
+```
 
-Running `node usb-power-profiling.js` will start a server on `localhost:2121`.
+Then open [the Firefox Profiler UI](https://profiler.firefox.com/from-url/http%3A%2F%2Flocalhost%3A2121%2Fprofile/calltree/) to load the data from the meter.
 
 ## External power profiling in the Firefox Profiler
 In Firefox 121 or later:
