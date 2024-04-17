@@ -1163,7 +1163,8 @@ const app = (req, res) => {
 
     const query = url.parse(req.url, true).query;
     if (!query.start && !query.end) {
-      sendError(res, "power: unexpected case");
+      sendError(res, "power: The /power API requires sppecifying start and end timestamps,"
+                + " see https://github.com/fqueze/usb-power-profiling/tree/main#http-api");
       return;
     }
 
@@ -1177,6 +1178,11 @@ const app = (req, res) => {
     }
 
     let timeEnd = parseFloat(query.end) - startTime;
+    if (timeEnd < 0) {
+      sendError(res, "power: The requested end time is before this instance of the script was started.");
+      return;
+    }
+
     let endIndex = startIndex;
     while (sampleTimes[endIndex] <= timeEnd) {
       ++endIndex;
