@@ -1237,7 +1237,8 @@ const app = (req, res) => {
   }
 };
 
+const port = process.env.PORT || 2121;
 const server = http.createServer(app)
-server.listen(2121, "0.0.0.0", () => {
-  console.log("Ensure devtools.performance.recording.power.external-url is set to http://localhost:2121/power in 'about:config'.");
+server.listen(port, "0.0.0.0", () => {
+  console.log(`Ensure devtools.performance.recording.power.external-url is set to http://localhost:${port}/power in 'about:config'.`);
 });
