@@ -936,38 +936,50 @@ async function getDeviceName(device) {
   });
 }
 
+async function getDeviceSerialNumber(device) {
+  return new Promise((resolve, reject) => {
+    device.getStringDescriptor(device.deviceDescriptor.iSerialNumber, (err, number) => {
+      if (err) {
+        reject();
+      } else {
+        resolve(number);
+      }
+    })
+  });
+}
+
 async function tryDevice(device) {
-  const vendorId = device.deviceDescriptor.idVendor;
+  const {idVendor, idProduct} = device.deviceDescriptor;
   let dev;
-  if (vendorId == GENERIC_VENDOR_ID) {
-    const productId = device.deviceDescriptor.idProduct;
-    if (SHIZUKU_PRODUCT_IDS.includes(productId)) {
+  if (idVendor == GENERIC_VENDOR_ID) {
+    if (SHIZUKU_PRODUCT_IDS.includes(idProduct)) {
       dev = new ShizukuDevice(device);
-    } else if (FNIRSI_PRODUCT_IDS.includes(productId)) {
+    } else if (FNIRSI_PRODUCT_IDS.includes(idProduct)) {
       dev = new FnirsiDevice(device);
-    } else if (KINGMETER_PRODUCT_IDS.includes(productId)) {
+    } else if (KINGMETER_PRODUCT_IDS.includes(idProduct)) {
       dev = new KingMeterDevice(device);
     }
-  } else if (vendorId in SUPPORTED_DEVICES) {
-    dev = new SUPPORTED_DEVICES[vendorId](device);
+  } else if (idVendor in SUPPORTED_DEVICES) {
+    dev = new SUPPORTED_DEVICES[idVendor](device);
   }
 
   if (dev) {
     try {
       device.open();
       dev.deviceName = await getDeviceName(device);
+      dev.serialNumber = await getDeviceSerialNumber(device);
       console.log(new Date(),
                   "Found device:", dev.deviceName,
-                  "Vendor Id: 0x" + vendorId.toString(16),
-                  "Product Id: 0x" + device.deviceDescriptor.idProduct.toString(16),
+                  "Serial Number:", dev.serialNumber,
+                  "Vendor Id: 0x" + idVendor.toString(16),
+                  "Product Id: 0x" + idProduct.toString(16),
                   `Address: ${device.busNumber}:${device.deviceAddress}`);
       dev.device = device;
 
       let existingDeviceIndex =
-        gDevices.findIndex(d => device.busNumber == d.device.busNumber &&
-                           device.deviceAddress == d.device.deviceAddress &&
-                           device.deviceDescriptor.idVendor == device.deviceDescriptor.idVendor &&
-                           device.deviceDescriptor.idProduct == device.deviceDescriptor.idProduct);
+        gDevices.findIndex(d => dev.serialNumber == d.serialNumber &&
+                           idVendor == d.device.deviceDescriptor.idVendor &&
+                           idProduct == d.device.deviceDescriptor.idProduct);
       if (existingDeviceIndex != -1) {
         let existingDev = gDevices[existingDeviceIndex];
         dev.samples = existingDev.samples;
@@ -988,8 +1000,9 @@ async function tryDevice(device) {
       device.open();
       console.log(new Date(),
                   "found unknown device:", await getDeviceName(device),
-                  "Vendor Id: 0x" + device.deviceDescriptor.idVendor.toString(16),
-                  "Product Id: 0x" + device.deviceDescriptor.idProduct.toString(16),
+                  "Serial Number:", await getDeviceSerialNumber(device),
+                  "Vendor Id: 0x" + idVendor.toString(16),
+                  "Product Id: 0x" + idProduct.toString(16),
                   device);
       device.close();
     } catch(e) { console.log(e); }
@@ -1120,7 +1133,7 @@ function profileFromData() {
   profile.meta.startTime = startTime;
   profile.meta.product = new Date(startTime).toLocaleDateString("fr-FR", {timeZone: "Europe/Paris"}) + " — USB power";
   profile.meta.physicalCPUs = 1;
-  profile.meta.CPUName = gDevices.map(d => d.deviceName).join(", ");
+  profile.meta.CPUName = gDevices.map(d => `${d.deviceName} (${d.serialNumber})`).join(", ");
 
   const threadSampleTimes = [].concat(...gDevices.map(dev => dev.sampleTimes));
   threadSampleTimes.sort((a, b) => a - b);
