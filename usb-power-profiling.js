@@ -974,6 +974,12 @@ async function tryDevice(device) {
                   "Vendor Id: 0x" + idVendor.toString(16),
                   "Product Id: 0x" + idProduct.toString(16),
                   `Address: ${device.busNumber}:${device.deviceAddress}`);
+      const envSerialNumber = process.env.USB_POWER_METER_SERIAL_NUMBER;
+      if (envSerialNumber && dev.serialNumber != envSerialNumber) {
+        console.log("Not sampling this power meter as its serial number is not " +
+                    envSerialNumber);
+        return;
+      }
       dev.device = device;
 
       let existingDeviceIndex =
