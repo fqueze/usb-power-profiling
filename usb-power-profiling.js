@@ -419,6 +419,8 @@ ShizukuDevice.prototype = {
   },
 
   async startSampling() {
+    this.deviceName = this.deviceName.replace(/ in Application Mode$/, "");
+
     try {
       await resetDevice(this.device);
     } catch(e) {
