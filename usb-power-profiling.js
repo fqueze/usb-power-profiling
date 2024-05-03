@@ -16,6 +16,7 @@ const FNIRSI_PRODUCT_IDS = [0x3A, 0x3B];
 const KINGMETER_PRODUCT_IDS = [0x5750, 0x5f50];
 const WITRN_VENDOR_ID = 0x716;
 const RUIDENG_VENDOR_ID = 0x28e9;
+const YZXSTUDIO_VENDOR_ID = 0x1a86;
 
 const DEBUG = false;//true;
 const DEBUG_log = DEBUG ? console.log : () => {};
@@ -689,8 +690,10 @@ function findVoltageOffset(data) {
   var candidates = [
     [offset => data.readInt32LE(offset) / 1e6, "Int32LE / 1e6"],
     [offset => data.readInt32LE(offset) / 1e5, "Int32LE / 1e5"],
+    [offset => data.readInt32LE(offset) / 1e4, "Int32LE / 1e4"],
     [offset => data.readInt32BE(offset) / 1e6, "Int32BE / 1e6"],
     [offset => data.readInt32BE(offset) / 1e5, "Int32BE / 1e5"],
+    [offset => data.readInt32BE(offset) / 1e4, "Int32BE / 1e4"],
     [offset => data.readFloatLE(offset), "FloatLE"],
     [offset => data.readFloatBE(offset), "FloatBE"],
   ];
@@ -908,6 +911,77 @@ RuiDengDevice.prototype = {
   }
 };
 
+function YzxStudioDevice(device) {
+}
+
+YzxStudioDevice.prototype = {
+  ondata(data) {
+    if (data.length < 28) {
+      console.log("received data is too short", data.length, data);
+      return;
+    }
+
+    if (data[0] != 0xAB) {
+      console.log("incorrect first byte", data[0]);
+      return;
+    }
+
+    const sum = array => array.reduce((acc, val) => acc + val);
+    const checksum = sum(data.slice(0, 27)) % 256;
+    if (checksum != data[27]) {
+      console.log(data.toString("hex"),
+                  "Invalid checksum:", data[27], "computed:", checksum);
+      return;
+    }
+
+    let v = data.readInt32LE(3) * 1e-4;
+    let i = data.readUInt32LE(7) * 1e-4;
+    if (DEBUG) {
+      let sample = {
+        v, i,
+        Ah: data.readUInt32LE(11) * 1e-4,
+        Wh: data.readUInt32LE(15) * 1e-4,
+        // The T_ms value is changing in 250ms increment, but it only moves when
+        // the power is > 0, making it unsuitable for our sample times.
+        T_ms: data.readUInt32LE(19) * 1e1,
+        "d+": data.readUInt16LE(23) * 1e-3,
+        "d-": data.readUInt16LE(25) * 1e-3,
+      };
+      console.log(sample, "power", data.readInt32LE(3) * 1e-4 * data.readUInt32LE(7) * 1e-4);
+    }
+
+    addSample(this, roundToNanoSecondPrecision(performance.now() - startPerformanceNow), v * i);
+  },
+  async startSampling() {
+    this.deviceName = "YZXStudio";
+
+    let serialDevices = (await SerialPort.list()).filter(d => d.vendorId == "1a86");
+    if (!serialDevices.length) {
+      console.log("serial device not found");
+      return;
+    }
+    DEBUG_log("Found serial devices", serialDevices);
+    this.serialDevice = new SerialPort({path: serialDevices[0].path, baudRate: 115200});
+    await new Promise((resolve, reject) => this.serialDevice.on("open", err => {
+      if (err) {
+        reject("error opening serial port:" + err);
+      } else {
+        resolve();
+      }
+    }));
+
+    this.serialDevice.flush(); // discard pending data
+    this.serialDevice.on("error", console.log);
+    this.serialDevice.on("data", data => { this.ondata(data); });
+    LogSampling();
+  },
+
+  stopSampling() {
+    this.serialDevice.close();
+    this.serialDevice = null;
+  }
+};
+
 const SUPPORTED_DEVICES = {}
 SUPPORTED_DEVICES[CHARGER_LAB_VENDOR_ID] = PowerZDevice;
 SUPPORTED_DEVICES[FNIRSI_VENDOR_ID] = FnirsiDevice;
@@ -915,6 +989,7 @@ SUPPORTED_DEVICES[KINGMETER_VENDOR_ID] = KingMeterDevice;
 SUPPORTED_DEVICES[CHARGER_LAB_BLUE_VENDOR_ID] = PowerZBlueDevice;
 SUPPORTED_DEVICES[WITRN_VENDOR_ID] = WitrnDevice;
 SUPPORTED_DEVICES[RUIDENG_VENDOR_ID] = RuiDengDevice;
+SUPPORTED_DEVICES[YZXSTUDIO_VENDOR_ID] = YzxStudioDevice;
 
 async function getDeviceName(device) {
   let manufacturer = await new Promise((resolve, reject) => {

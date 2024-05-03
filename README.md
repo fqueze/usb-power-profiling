@@ -44,6 +44,7 @@ The example profiles are taken using a USB light, first keeping the light off fo
 |RuiDeng|TC66C|https://share.firefox.dev/3v4AvFV|80ms|Sampling rate depends on how much data is displayed on the power meter's screen. With the full display, 100ms is the minimum interval between samples. With only the main 3 values displayed, 90ms is in the minimum between samples, with a static screen (eg. settings) the minimum interval is 80ms. Significant power changes take up to [500ms to stabilize](https://share.firefox.dev/48w6Hkc) (with a few samples showing only a part of the change).|
 |WITRN|C5|https://share.firefox.dev/41nqAaQ|10ms|Samples contain timestamps in ms.|
 |ATORCH|ACD15P|https://share.firefox.dev/3SIWpGS|1s|Very low sampling rate.|
+|YZXStudio|1280E|https://share.firefox.dev/3Wr9HeW|250ms|Low sampling rate. Significant power changes take up to 500ms (2 samples) to stabilize. Seems to have a low level of noise, making it possible to see a difference between low power values ( <10mW) and 0.|
 ## Power meters likely to work
 Compatibility with these devices has not been verified, but they are likely to either "just work", or work with a trivial adjustment to the code (eg. tweak a USB product id).
 |Brand|Model|Notes|
