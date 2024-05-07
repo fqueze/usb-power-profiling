@@ -1,4 +1,11 @@
 {
+  "name": "usb-power-profiling",
+  "version": "1.0.0",
+  "description": "Make USB power meters usable with the Firefox Profiler",
+  "homepage": "https://github.com/fqueze/usb-power-profiling/",
+  "repository": "github:fqueze/usb-power-profiling",
+  "author": "Florian Quèze",
+  "license": "MPL-2.0",
   "scripts": {
     "start": "npx nodemon usb-power-profiling.js"
   },
