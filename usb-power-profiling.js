@@ -1116,8 +1116,6 @@ process.on('SIGINT', async function() {
   process.exit();
 });
 
-startSampling().then(() => {});
-
 usb.on('attach', device => {
   console.log(new Date(), "Device attached");
   tryDevice(device);
@@ -1314,8 +1312,34 @@ const app = (req, res) => {
   }
 };
 
-const port = process.env.PORT || 2121;
-const server = http.createServer(app)
-server.listen(port, "0.0.0.0", () => {
-  console.log(`Ensure devtools.performance.recording.power.external-url is set to http://localhost:${port}/power in 'about:config'.`);
-});
+let server;
+
+async function runPowerCollectionServer(customPort) {
+  if (server) {
+    return;
+  }
+  await startSampling();
+
+  const port = customPort || process.env.PORT || 2121;
+  server = http.createServer(app)
+  server.listen(port, "0.0.0.0", () => {
+    console.log(`Ensure devtools.performance.recording.power.external-url is set to http://localhost:${port}/power in 'about:config'.`);
+  });
+}
+
+async function stopPowerCollectionServer() {
+  if (!server) {
+    return;
+  }
+  server.close();
+  server = null;
+}
+
+if (require.main === module) {
+    startSampling().then(() => {
+      runPowerCollectionServer();
+    });
+}
+
+module.exports.runPowerCollectionServer = runPowerCollectionServer;
+module.exports.stopPowerCollectionServer = stopPowerCollectionServer;
