@@ -1205,7 +1205,7 @@ function counterObject(name, description, times, samples, geckoFormat = false) {
   return rv;
 }
 
-function profileFromData() {
+async function profileFromData() {
   if (!gDevices.length) {
     throw "No device is being sampled";
   }
@@ -1246,6 +1246,44 @@ function profileFromData() {
   return profile;
 }
 
+async function getPowerData(start, end) {
+    //TODO: include data for all devices
+    const {samples, sampleTimes, deviceName} = gDevices[gDevices.length - 1];
+
+    let timeStart = parseFloat(start) - startTime;
+    let startIndex = 0;
+    while (sampleTimes[startIndex] < timeStart) {
+      ++startIndex;
+    }
+
+    let timeEnd = parseFloat(end) - startTime;
+    if (timeEnd < 0) {
+      throw "The requested end time is before this instance of the script was started."
+      return;
+    }
+
+    let endIndex = startIndex;
+    while (sampleTimes[endIndex] <= timeEnd) {
+      ++endIndex;
+    }
+
+    let times = sampleTimes.slice(startIndex, endIndex).map(t => roundToNanoSecondPrecision(t - timeStart));
+    let timeInterval = i => i == 0 ? 1 : (times[i] - times[i - 1]) / 1000;
+    let counter = counterObject("USB power", deviceName, times,
+                                samples.slice(startIndex, endIndex)
+                                       .map((sample, i) => Math.round(WattSecondToPicoWattHour(sample) * timeInterval(i))), true);
+
+    return [counter];
+}
+
+async function resetPowerData() {
+    //TODO: include data for all devices
+    const device = gDevices[gDevices.length - 1];
+
+    device.samples = [];
+    device.sampleTimes = [];
+}
+
 const app = (req, res) => {
   console.log(new Date(), req.url);
 
@@ -1262,32 +1300,13 @@ const app = (req, res) => {
       return;
     }
 
-    //TODO: include data for all devices
-    const {samples, sampleTimes, deviceName} = gDevices[gDevices.length - 1];
-
-    let timeStart = parseFloat(query.start) - startTime;
-    let startIndex = 0;
-    while (sampleTimes[startIndex] < timeStart) {
-      ++startIndex;
-    }
-
     let timeEnd = parseFloat(query.end) - startTime;
     if (timeEnd < 0) {
       sendError(res, "power: The requested end time is before this instance of the script was started.");
       return;
     }
 
-    let endIndex = startIndex;
-    while (sampleTimes[endIndex] <= timeEnd) {
-      ++endIndex;
-    }
-
-    let times = sampleTimes.slice(startIndex, endIndex).map(t => roundToNanoSecondPrecision(t - timeStart));
-    let timeInterval = i => i == 0 ? 1 : (times[i] - times[i - 1]) / 1000;
-    let counter = counterObject("USB power", deviceName, times,
-                                samples.slice(startIndex, endIndex)
-                                       .map((sample, i) => Math.round(WattSecondToPicoWattHour(sample) * timeInterval(i))), true);
-    sendJSON(res, [counter], true);
+    sendJSON(res, getPowerData(query.start, query.end), true);
     return;
   }
 
@@ -1312,12 +1331,7 @@ const app = (req, res) => {
   }
 };
 
-let server;
-
 async function runPowerCollectionServer(customPort) {
-  if (server) {
-    return;
-  }
   await startSampling();
 
   const port = customPort || process.env.PORT || 2121;
@@ -1327,19 +1341,15 @@ async function runPowerCollectionServer(customPort) {
   });
 }
 
-async function stopPowerCollectionServer() {
-  if (!server) {
-    return;
-  }
-  server.close();
-  server = null;
-}
-
 if (require.main === module) {
     startSampling().then(() => {
       runPowerCollectionServer();
     });
 }
 
-module.exports.runPowerCollectionServer = runPowerCollectionServer;
-module.exports.stopPowerCollectionServer = stopPowerCollectionServer;
+module.exports = {
+  startSampling,
+  getPowerData,
+  resetPowerData,
+  profileFromData
+}
