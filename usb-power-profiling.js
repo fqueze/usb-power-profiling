@@ -1205,7 +1205,7 @@ function counterObject(name, description, times, samples, geckoFormat = false) {
   return rv;
 }
 
-async function profileFromData() {
+function profileFromData() {
   if (!gDevices.length) {
     throw "No device is being sampled";
   }
@@ -1246,9 +1246,10 @@ async function profileFromData() {
   return profile;
 }
 
-async function getPowerData(start, end) {
-    //TODO: include data for all devices
-    const {samples, sampleTimes, deviceName} = gDevices[gDevices.length - 1];
+function getPowerData(start, end) {
+  let counters = [];
+  for (let device of gDevices) {
+    const {samples, sampleTimes, deviceName} = device;
 
     let timeStart = parseFloat(start) - startTime;
     let startIndex = 0;
@@ -1272,16 +1273,18 @@ async function getPowerData(start, end) {
     let counter = counterObject("USB power", deviceName, times,
                                 samples.slice(startIndex, endIndex)
                                        .map((sample, i) => Math.round(WattSecondToPicoWattHour(sample) * timeInterval(i))), true);
+  
+    counters.push(counter);
+  }
 
-    return [counter];
+  return counters;
 }
 
-async function resetPowerData() {
-    //TODO: include data for all devices
-    const device = gDevices[gDevices.length - 1];
-
+function resetPowerData() {
+  for (let device of gDevices) {
     device.samples = [];
     device.sampleTimes = [];
+  }
 }
 
 const app = (req, res) => {
@@ -1329,7 +1332,15 @@ const app = (req, res) => {
     sendError(res, 'wait: ' + (Date.now() - startTime));
     return;
   }
+
+  if (req.url == "/reset") {
+    resetPowerData();
+    res.end('Power data reset');
+    return;
+  }
 };
+
+var server;
 
 async function runPowerCollectionServer(customPort) {
   await startSampling();
@@ -1342,9 +1353,9 @@ async function runPowerCollectionServer(customPort) {
 }
 
 if (require.main === module) {
-    startSampling().then(() => {
-      runPowerCollectionServer();
-    });
+  startSampling().then(() => {
+    runPowerCollectionServer();
+  });
 }
 
 module.exports = {
