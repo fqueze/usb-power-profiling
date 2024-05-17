@@ -1247,6 +1247,11 @@ function profileFromData() {
 }
 
 function getPowerData(start, end) {
+  let timeEnd = parseFloat(end) - startTime;
+  if (timeEnd < 0) {
+    throw "The requested end time is before this instance of the script was started."
+  }
+
   let counters = [];
   for (let device of gDevices) {
     const {samples, sampleTimes, deviceName} = device;
@@ -1255,12 +1260,6 @@ function getPowerData(start, end) {
     let startIndex = 0;
     while (sampleTimes[startIndex] < timeStart) {
       ++startIndex;
-    }
-
-    let timeEnd = parseFloat(end) - startTime;
-    if (timeEnd < 0) {
-      throw "The requested end time is before this instance of the script was started."
-      return;
     }
 
     let endIndex = startIndex;
