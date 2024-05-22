@@ -1093,6 +1093,8 @@ async function tryDevice(device) {
 }
 
 async function startSampling() {
+  initialize();
+
   startTime = Date.now();
   startPerformanceNow = performance.now();
 
@@ -1105,40 +1107,50 @@ async function startSampling() {
   }
 }
 
-// process.on('SIGINT', async function() {
-//   if (gClosing) {
-//     return;
-//   }
-//   gClosing = true;
-//   if (gDevices.length > 0) {
-//     await Promise.all(gDevices.map(d => d.stopSampling()));
-//   }
-//   process.exit();
-// });
+var initialized = false;
 
-// usb.on('attach', device => {
-//   console.log(new Date(), "Device attached");
-//   tryDevice(device);
-// });
-// usb.on('detach', function(device) {
-//   if (!(device.deviceDescriptor.idVendor in SUPPORTED_DEVICES)) {
-//     return;
-//   }
+function initialize() {
+  if (initialized) {
+    return;
+  }
 
-//   if (!gDevices.length) {
-//     return;
-//   }
+  process.on('SIGINT', async function() {
+    if (gClosing) {
+      return;
+    }
+    gClosing = true;
+    if (gDevices.length > 0) {
+      await Promise.all(gDevices.map(d => d.stopSampling()));
+    }
+    process.exit();
+  });
 
-//   const dev = gDevices.find(d => device.busNumber == d.device.busNumber && device.deviceAddress == d.device.deviceAddress);
-//   if (dev) {
-//     console.log(dev.deviceName, "has been detached");
-//     dev.device.close();
-//     dev.device = null;
-//     gDevices.splice(gDevices.indexOf(dev), 1);
-//   } else {
-//     console.log("detach", device);
-//   }
-// });
+  usb.on('attach', device => {
+    console.log(new Date(), "Device attached");
+    tryDevice(device);
+  });
+  usb.on('detach', function(device) {
+    if (!(device.deviceDescriptor.idVendor in SUPPORTED_DEVICES)) {
+      return;
+    }
+
+    if (!gDevices.length) {
+      return;
+    }
+
+    const dev = gDevices.find(d => device.busNumber == d.device.busNumber && device.deviceAddress == d.device.deviceAddress);
+    if (dev) {
+      console.log(dev.deviceName, "has been detached");
+      dev.device.close();
+      dev.device = null;
+      gDevices.splice(gDevices.indexOf(dev), 1);
+    } else {
+      console.log("detach", device);
+    }
+  });
+
+  initialized = true;
+}
 
 
 function sendJSON(res, data, forceGC = false) {
