@@ -1354,8 +1354,6 @@ const app = (req, res) => {
 var server;
 
 async function runPowerCollectionServer(customPort) {
-  await startSampling();
-
   const port = customPort || process.env.PORT || 2121;
   server = http.createServer(app)
   server.listen(port, "0.0.0.0", () => {
