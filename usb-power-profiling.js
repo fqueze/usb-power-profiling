@@ -1269,11 +1269,9 @@ function profileFromData() {
     gDevices.length == 1 ? gDevices[0].sampleTimes
                          : [].concat(...gDevices.map(dev => dev.sampleTimes))
                              .sort((a, b) => a - b);
-  let zeros = new Array(threadSampleTimes.length).fill(0);
   let firstThread = profile.threads[0];
   let threadSamples = firstThread.samples;
-  threadSamples.eventDelay = zeros;
-  threadSamples.stack = zeros;
+  threadSamples.stack = new Array(threadSampleTimes.length).fill(0);
   threadSamples.time = threadSampleTimes;
   threadSamples.length = threadSampleTimes.length;
 
