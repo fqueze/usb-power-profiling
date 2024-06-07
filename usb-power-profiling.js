@@ -102,6 +102,9 @@ function findBulkInOutEndPoints(device) {
 }
 
 function addSample(self, time, power) {
+  // Limit the time precision to 1 µs.
+  time = Math.round(time * 1000) / 1000;
+
   if (self.sampleTimes.length < MAX_SAMPLES) {
     // Increase the buffer size if we have not reached MAX_SAMPLES yet.
     self.sampleTimes.push(time);
