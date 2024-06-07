@@ -1197,18 +1197,35 @@ function WattSecondToPicoWattHour(value) {
 }
 
 function counterObject(name, description, times, samples, geckoFormat = false) {
-  let time = [];
-  // Remove consecutive 0 samples.
-  let count = samples.filter((sample, index) => {
-    let keep =
-      sample != 0 ||
-      index == 0 || index == samples.length - 1 ||
-      samples[index - 1] != 0 || samples[index + 1] != 0;
-    if (keep) {
-      time.push(times[index])
+  let time, count;
+
+  // Before calling the expensive .filter method, check if we have any zero.
+  let hasZeros = false;
+  for (let i = 1; i < samples.length - 2; ++i) {
+    if (samples[i] == 0) {
+      hasZeros = true;
+      break;
     }
-    return keep;
-  });
+  }
+  if (hasZeros) {
+    DEBUG_log("some zeros to filter out");
+    time = [];
+    // Remove consecutive 0 samples.
+    count = samples.filter((sample, index) => {
+      let keep =
+        sample != 0 ||
+        index == 0 || index == samples.length - 1 ||
+        samples[index - 1] != 0 || samples[index + 1] != 0;
+      if (keep) {
+        time.push(times[index])
+      }
+      return keep;
+    });
+  } else {
+    // Fast path
+    time = times;
+    count = samples;
+  }
 
   let rv = {
     name,
@@ -1246,8 +1263,13 @@ function profileFromData() {
   profile.meta.physicalCPUs = 1;
   profile.meta.CPUName = gDevices.map(d => `${d.deviceName} (${d.serialNumber})`).join(", ");
 
-  const threadSampleTimes = [].concat(...gDevices.map(dev => dev.sampleTimes));
-  threadSampleTimes.sort((a, b) => a - b);
+  for (let dev of gDevices) {
+    reorderSamples(dev);
+  }
+  const threadSampleTimes =
+    gDevices.length == 1 ? gDevices[0].sampleTimes
+                         : [].concat(...gDevices.map(dev => dev.sampleTimes))
+                             .sort((a, b) => a - b);
   let zeros = new Array(threadSampleTimes.length).fill(0);
   let firstThread = profile.threads[0];
   let threadSamples = firstThread.samples;
@@ -1259,7 +1281,6 @@ function profileFromData() {
   firstThread.stringArray = ["(root)"];
 
   for (let dev of gDevices) {
-    reorderSamples(dev);
     let {deviceName, sampleTimes} = dev;
     let timeInterval = i => i == 0 ? 1 : (sampleTimes[i] - sampleTimes[i - 1]) / 1000;
     let samples = [];
