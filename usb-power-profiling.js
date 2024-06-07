@@ -102,12 +102,28 @@ function findBulkInOutEndPoints(device) {
 }
 
 function addSample(self, time, power) {
-  self.sampleTimes.push(time);
-  self.samples.push(power);
-  if (self.sampleTimes.length > MAX_SAMPLES) {
-    self.sampleTimes.shift();
-    self.samples.shift();
+  if (self.sampleTimes.length < MAX_SAMPLES) {
+    // Increase the buffer size if we have not reached MAX_SAMPLES yet.
+    self.sampleTimes.push(time);
+    self.samples.push(power);
+  } else {
+    // Otherwise, treat it as a ring buffer to avoid the cost of moving memory.
+    self.samples[self.firstSample] = power;
+    self.sampleTimes[self.firstSample] = time;
+    self.firstSample = (self.firstSample + 1) % MAX_SAMPLES;
   }
+}
+
+function reorderSamples(self) {
+  if (self.firstSample == 0) {
+    return;
+  }
+
+  let samplesEnd = self.samples.splice(0, self.firstSample);
+  self.samples = self.samples.concat(samplesEnd);
+  let sampleTimesEnd = self.sampleTimes.splice(0, self.firstSample);
+  self.sampleTimes = self.sampleTimes.concat(sampleTimesEnd);
+  self.firstSample = 0;
 }
 
 function PowerZDevice(device) {
@@ -1067,10 +1083,12 @@ async function tryDevice(device) {
         let existingDev = gDevices[existingDeviceIndex];
         dev.samples = existingDev.samples;
         dev.sampleTimes = existingDev.sampleTimes;
+        dev.firstSample = existingDev.firstSample;
         gDevices[existingDeviceIndex] = dev;
       } else {
         dev.samples = [];
         dev.sampleTimes = [];
+        dev.firstSample = 0;
         gDevices.push(dev);
       }
 
@@ -1241,6 +1259,7 @@ function profileFromData() {
   firstThread.stringArray = ["(root)"];
 
   for (let dev of gDevices) {
+    reorderSamples(dev);
     let {deviceName, sampleTimes} = dev;
     let timeInterval = i => i == 0 ? 1 : (sampleTimes[i] - sampleTimes[i - 1]) / 1000;
     let samples = [];
@@ -1267,6 +1286,7 @@ function getPowerData(start, end) {
 
   let counters = [];
   for (let device of gDevices) {
+    reorderSamples(device);
     const {samples, sampleTimes, deviceName} = device;
 
     let startIndex = 0;
@@ -1295,6 +1315,7 @@ function resetPowerData() {
   for (let device of gDevices) {
     device.samples = [];
     device.sampleTimes = [];
+    device.firstSample = 0;
   }
 }
 
