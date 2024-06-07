@@ -414,11 +414,10 @@ ShizukuDevice.prototype = {
       return;
     }
 
-    const sample = payload.slice(4);
-    const voltage = sample.readFloatLE();
-    const current = Math.abs(sample.readFloatLE(4));
+    const voltage = payload.readFloatLE(4);
+    const current = Math.abs(payload.readFloatLE(8));
     // Seems to be the time in µs since the power meter was started.
-    const timestamp = sample.readBigUInt64LE(sample.length - 8);
+    const timestamp = payload.readBigUInt64LE(payload.length - 8);
     if (!this.initialTimeStamp) {
       this.initialTimeStamp = timestamp;
       this.initialPerformanceNow = performance.now() - startPerformanceNow;
