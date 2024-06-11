@@ -295,7 +295,6 @@ footer img {
 	}
 	return keep;
       });
-      let zeros = new Array(times.length).fill(0);
       return {
         name,
         category: "power",
@@ -303,7 +302,7 @@ footer img {
         pid: "0",
         mainThreadIndex: 0,
         samples: {
-          time, number: zeros, count, length: count.length
+          time, count, length: count.length
         }
       }
     }
