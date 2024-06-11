@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>USB power profiling</title>
+  <style>
+.profile {
+  border: 1px solid black;
+  padding-top: 1px
+}
+.profile > div {
+  position: relative;
+  padding-bottom: 5%
+}
+.profile > div > svg {
+  position: absolute;
+}
+.profile > div > svg > path {
+  fill: #73737388;
+  stroke: #737373;
+  stroke-width: 6px;
+  stroke-linejoin: bevel;
+}
+.profile > p {
+  text-align: center;
+  background-color: #73737322;
+  margin-top: 0;
+  border-top: 1px solid #737373;
+}
+footer{
+  text-align: center;
+  font-size:smaller;
+}
+footer img {
+  height:22px !important;
+  margin-left: 3px;
+  vertical-align: text-bottom;
+}
+  </style>
+</head>
+<body>
+  <h1 id="power"><span id="deviceNameH1">USB</span> live profile: <span id="lastPower"></span>W</h1>
+  <p>usb-power-profiling base URL: <code>http://<input type=text id="hostname" value="localhost:2121">/</code></p>
+  <div class="profile">
+    <div>
+      <svg viewBox="0 0 2400 120">
+        <path d=""/>
+      </svg>
+      </div>
+    <p><span id="deviceNameProfile">USB</span>, <span id="sampleCount">0</span> samples.</p>
+    <ul>
+      <li>Energy used: <span id="totalEnergy"></span>Wh in <span id="totalTime"></span></li>
+      <li>Average power: <span id="averagePower"></span>W</li>
+      <li>Max power: <span id="maxPower"></span>W</li>
+      <li>Median power: <span id="medianPower"></span>W</li>
+    </ul>
+  </div>
+  <p><a id="open" href="#">Open in the Firefox Profiler</a>. Download as: <a id="csv" href="#">csv</a>, <a id="profile" href="#">profile</a>.</p>
+  <script type="application/javascript">
+    let sampleData = [];
+    let lastSampleTime = 0;
+    let deviceName = "USB";
+
+    function setText(id, text) {
+      document.getElementById(id).textContent = text;
+    }
+
+    function formatDuration(timeS) {
+      let result = "";
+      if (timeS > 60) {
+        result = Math.round(timeS % 60) + "s";
+        let timeMin = Math.floor(timeS / 60);
+        if (timeMin > 60) {
+          result = Math.floor(timeMin / 60) + "h" + (timeMin % 60) + "min";
+        } else {
+          result = timeMin + "min" + result;
+        }
+      } else {
+        result = Math.round(timeS) + "s";
+      }
+
+      return result;
+    }
+
+    function setDeviceName(name) {
+      deviceName = name;
+      document.title = `${deviceName} power profiling`;
+      setText("deviceNameProfile", deviceName);
+      setText("deviceNameH1", deviceName);
+    }
+
+    async function fetchSamples() {
+      let url = `http://${document.getElementById("hostname").value}/rawdata`;
+      if (lastSampleTime > 0) {
+        url += "?last=" + lastSampleTime;
+      }
+      let response = await fetch(url);
+      let data = await response.json();
+      if (data[0].samples.length == 0) {
+        // No new sample.
+        return;
+      }
+      if (lastSampleTime == 0) {
+        sampleData = data[0];
+        setDeviceName(sampleData.deviceName);
+        lastSampleTime = sampleData.sampleTimes.at(-1);
+      } else if (lastSampleTime < data[0].sampleTimes[0]) {
+        Array.prototype.push.apply(sampleData.sampleTimes, data[0].sampleTimes);
+        Array.prototype.push.apply(sampleData.samples, data[0].samples);
+        lastSampleTime = sampleData.sampleTimes.at(-1);
+      } else {
+        console.log("unexpected", data);
+      }
+      setText("sampleCount", sampleData.samples.length);
+      setText("lastPower", sampleData.samples.at(-1));
+      showGraph();
+    }
+
+    const graphHeight = 120;
+    const graphWidth = 2400;
+    const halfStrokeWidth = 3;
+    function makeSVGPath(graph) {
+      let lastLetter = "";
+      function letter(l) {
+        if (l == lastLetter) {
+          return "";
+        }
+        lastLetter = l;
+        return l;
+      }
+      let path;
+      function append(cmd) {
+        if (/^\d/.test(cmd) && /\d$/.test(path)) {
+          path += " ";
+        }
+        path += cmd;
+      }
+      let x = i => Math.round(graph[i].x * graphWidth);
+      let y = i => graph[i].y == 0 ? graphHeight + halfStrokeWidth
+          : Math.round(Math.max(halfStrokeWidth, (1 - graph[i].y) * graphHeight));
+      let lastX = -halfStrokeWidth * 2;
+      let lastY = y(0);
+      path = `${letter('M')}${lastX} ${graphHeight}V${lastY}`;
+      for (let i = 0; i < graph.length; ++i) {
+        let xi = x(i);
+        let yi = y(i);
+        if (xi == lastX && yi == lastY) {
+          continue;
+        }
+        if (yi == lastY) {
+          while (i + 1 < graph.length && y(i + 1) == lastY) {
+            xi = x(++i);
+          }
+          append(`${letter('h')}${xi - lastX}`);
+        } else {
+          if (xi == lastX) {
+            let ys = [yi];
+            let j = 1;
+            while (i + j < graph.length && x(i + j) == xi) {
+              ys.push(y(i + j));
+              j++;
+            }
+            let usefulYs = [];
+            let max = Math.max(...ys);
+            let min = Math.min(...ys);
+            let last = ys[ys.length - 1];
+            if (max != last && max > lastY) {
+              usefulYs.push(max);
+            }
+            if (min != last && min < lastY) {
+              usefulYs.push(min);
+            }
+            usefulYs.push(last);
+
+            i += j - 1;
+            for (let usefulY of usefulYs) {
+              yi = usefulY;
+              let v = `${lastLetter != 'v' ? 'v' : ''}${yi - lastY}`;
+              let V = `${lastLetter != 'V' ? 'V' : ''}${yi}`;
+              if (v.length <= V.length) {
+                append(v);
+                lastLetter = 'v';
+              } else {
+                append(V);
+                lastLetter = 'V';
+              }
+              lastY = yi;
+            }
+          } else {
+            append(`${letter('l')}${xi - lastX}`);
+            append(`${yi - lastY}`);
+          }
+        }
+        lastX = xi;
+        lastY = yi;
+      }
+      path += `H${graphWidth + halfStrokeWidth * 2}V${graphHeight}`;
+
+      return path;
+    }
+
+    function showGraph() {
+      if (document.hidden) {
+        return;
+      }
+
+      const {samples, sampleTimes} = sampleData;
+      let maxPowerW = samples.reduce((a,b) => Math.max(a,b));
+      setText("maxPower", maxPowerW);
+      let startTime = sampleData.sampleTimes[0];
+      let durationMs = sampleTimes.at(-1) - startTime;
+      setText("totalTime", formatDuration(durationMs / 1000));
+
+      let graph = samples.map((v, i) => ({
+        x: (sampleTimes[i] - startTime) / durationMs,
+        y: v / maxPowerW}));
+      document.querySelector("path").setAttribute("d", makeSVGPath(graph));
+
+      let energyWms = samples.reduce((acc, val) => acc + val);
+      setText("averagePower", (energyWms / durationMs).toPrecision(3));
+      setText("medianPower", samples.slice().sort((a, b) => a - b)[Math.floor(samples.length / 2)]);
+      setText("totalEnergy", (energyWms /1000 / 3600).toPrecision(3));
+    }
+
+    setInterval(fetchSamples, 5000);
+    fetchSamples();
+
+    function downloadCsv(event) {
+      let mimeType = "text/plain";
+      let data = sampleData.sampleTimes.map((v, i) => `${v};${sampleData.samples[i]}`).join("\n");
+      let url = URL.createObjectURL(
+        new Blob([data], { type: mimeType })
+      );
+      event.target.href = url;
+      event.target.download = `${new Date().toDateString()} - ${document.getElementById("sampleCount").innerText} samples.csv`;
+      setTimeout(() => URL.revokeObjectURL(url), 0);
+    }
+
+    function counterObject(name, description, times, samples) {
+      let time = [];
+      // Remove consecutive 0 samples.
+      let count = samples.filter((sample, index) => {
+	let keep =
+          sample != 0 ||
+          index == 0 || index == samples.length - 1 ||
+          samples[index - 1] != 0 || samples[index + 1] != 0;
+	if (keep) {
+	  time.push(times[index])
+	}
+	return keep;
+      });
+      let zeros = new Array(times.length).fill(0);
+      return {
+        name,
+        category: "power",
+        description,
+        pid: "0",
+        mainThreadIndex: 0,
+        samples: {
+          time, number: zeros, count, length: count.length
+        }
+      }
+    }
+    function WattMillisecondToPicoWattHour(value) {
+      return value / 1000 / 3600 * 1e12;
+    }
+    function makeProfile() {
+      const baseProfile = '{"meta":{"interval":1000,"startTime":0,"abi":"","misc":"","oscpu":"","platform":"","processType":0,"extensions":{"id":[],"name":[],"baseURL":[],"length":0},"categories":[{"name":"Other","color":"grey","subcategories":["Other"]}],"product":"USB power profiling","stackwalk":0,"toolkit":"","version":27,"preprocessedProfileVersion":48,"appBuildID":"","sourceURL":"","physicalCPUs":1,"logicalCPUs":0,"CPUName":"USB power meter","symbolicationNotSupported":true,"markerSchema":[]},"libs":[],"pages":[],"threads":[{"processType":"default","processStartupTime":0,"processShutdownTime":null,"registerTime":0,"unregisterTime":null,"pausedRanges":[],"name":"GeckoMain","isMainThread":true,"pid":"0","tid":0,"samples":{"weightType":"samples","weight":null,"eventDelay":[],"stack":[],"time":[],"length":0},"markers":{"data":[],"name":[],"startTime":[],"endTime":[],"phase":[],"category":[],"length":0},"stackTable":{"frame":[0],"prefix":[null],"category":[0],"subcategory":[0],"length":1},"frameTable":{"address":[-1],"inlineDepth":[0],"category":[null],"subcategory":[0],"func":[0],"nativeSymbol":[null],"innerWindowID":[0],"implementation":[null],"line":[null],"column":[null],"length":1},"stringTable":{"_array":["(root)"],"_stringToIndex":{}},"funcTable":{"isJS":[false],"relevantForJS":[false],"name":[0],"resource":[-1],"fileName":[null],"lineNumber":[null],"columnNumber":[null],"length":1},"resourceTable":{"lib":[],"name":[],"host":[],"type":[],"length":0},"nativeSymbols":{"libIndex":[],"address":[],"name":[],"functionSize":[],"length":0}}],"counters":[]}';
+
+      let profile = JSON.parse(baseProfile);
+      profile.meta.startTime = sampleData.startTime;
+      let sampleTimes = sampleData.sampleTimes;
+      profile.meta.profilingStartTime = sampleTimes[0];
+      profile.meta.profilingEndTime = sampleTimes.at(-1);
+      profile.meta.CPUName = deviceName;
+      let zeros = new Array(sampleTimes.length).fill(0);
+
+      let threadSamples = profile.threads[0].samples;
+      threadSamples.stack = zeros;
+      threadSamples.time = sampleTimes;
+      threadSamples.length = sampleTimes.length;
+
+      profile.counters = [
+        counterObject(deviceName,
+                      `Data recorded by a ${deviceName} power meter`,
+                      sampleTimes,
+                      sampleData.samples.map((v, i) =>
+                        Math.round(WattMillisecondToPicoWattHour(v) *
+                                   (sampleTimes[i] - (i > 0 ? sampleTimes[i - 1] : 0)))))
+      ];
+
+      return profile;
+    }
+
+    function downloadProfile(event) {
+      let mimeType = "application/json";
+      let url = URL.createObjectURL(
+        new Blob([JSON.stringify(makeProfile())], { type: mimeType })
+      );
+      event.target.href = url;
+      event.target.download = `${new Date().toDateString()} - ${document.getElementById("sampleCount").innerText} samples.json`;
+      setTimeout(() => URL.revokeObjectURL(url), 0);
+    }
+
+    async function openProfile() {
+      const origin = "https://profiler.firefox.com";
+      const profilerURL = origin + "/from-post-message/";
+      const profilerWindow = window.open(profilerURL, "_blank");
+
+      if (!profilerWindow) {
+        console.error("Failed to open the new window.");
+        return;
+      }
+
+      let isReady = false;
+      window.addEventListener("message", function listener(event) {
+        if (event.data && event.data.name === "is-ready") {
+          window.removeEventListener("message", listener);
+          isReady = true;
+          const message = {
+            name: "inject-profile",
+            profile: makeProfile(),
+          };
+          profilerWindow.postMessage(message, origin);
+        }
+      });
+
+      while (true) {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        if (isReady) {
+          break;
+        }
+        profilerWindow.postMessage({ name: "is-ready" }, origin);
+      }
+    }
+
+    document.getElementById("csv").addEventListener("click", downloadCsv);
+    document.getElementById("profile").addEventListener("click", downloadProfile);
+    document.getElementById("open").addEventListener("click", openProfile);
+  </script>
+  <footer>This work © 2024 by Florian Quèze is licensed under <a href="http://creativecommons.org/licenses/by-nc/4.0/" target="_blank" rel="license noopener noreferrer">CC BY-NC 4.0<img src="https://mirrors.creativecommons.org/presskit/icons/cc.svg" alt="CC"><img src="https://mirrors.creativecommons.org/presskit/icons/by.svg" alt="BY"><img src="https://mirrors.creativecommons.org/presskit/icons/nc.svg" alt="NC"></a></footer>
+</body>
+</html>

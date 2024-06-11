@@ -9,7 +9,7 @@ npm i
 node usb-power-profiling.js
 ```
 
-Then open [the Firefox Profiler UI](https://profiler.firefox.com/from-url/http%3A%2F%2Flocalhost%3A2121%2Fprofile/calltree/) to load the data from the meter.
+Then open [the Firefox Profiler UI](https://profiler.firefox.com/from-url/http%3A%2F%2Flocalhost%3A2121%2Fprofile/calltree/) to load the data from the meter. You can also load [http://localhost:2121/](http://localhost:2121/) in your browser to see a live power profile (updated every 5 seconds).
 
 ## External power profiling in the Firefox Profiler
 In Firefox 121 or later:
@@ -24,6 +24,7 @@ In Firefox 121 or later:
 ## HTTP API
 - `GET /profile` will return a profile containing all the data since the script has started. You can view it by [loading it](https://profiler.firefox.com/from-url/http%3A%2F%2Flocalhost%3A2121%2Fprofile/calltree/?v=10) in the [Firefox Profiler](https://profiler.firefox.com).
 - `GET /power?start=<start timestamp in ms>&end=<end timestamp in ms>` returns only a power track to be added into a profile from the Gecko Profiler. The start timestamp should be `profile.meta.startTime + profile.meta.profilingStartTime` from the profile and the end timestamp should be `profile.meta.startTime + profile.meta.profilingEndTime`.
+- `GET /rawdata?last=<timestamp>` returns all the stored data in JSON format if the last timestamp is omitted, or all data more recent than the provided last timestamp if it is provided. This API is used by the live profiling web UI.
 
 # Supported devices
 ## Power meters known to work

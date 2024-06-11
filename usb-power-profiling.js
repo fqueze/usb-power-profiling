@@ -5,6 +5,7 @@ const url = require('url');
 const { createDecipheriv } = require('node:crypto');
 const { SerialPort } = require('serialport');
 const { CRC } = require('crc-full');
+const nStatic = require('node-static');
 
 const CHARGER_LAB_VENDOR_ID = 0x5FC9;
 const FNIRSI_VENDOR_ID = 0x2E3C;
@@ -1366,6 +1367,41 @@ const app = (req, res) => {
     return;
   }
 
+  if (req.url.startsWith("/rawdata")) {
+    if (!gDevices.length) {
+      sendError(res, "power: no device is being sampled");
+      return;
+    }
+
+    const query = url.parse(req.url, true).query;
+
+    let data = [];
+    for (let device of gDevices) {
+      reorderSamples(device);
+      const {samples, sampleTimes, deviceName} = device;
+
+      let startIndex = 0;
+      if (query.last) {
+        let lastTime = parseFloat(query.last);
+        while (sampleTimes[startIndex] <= lastTime) {
+          ++startIndex;
+        }
+      }
+
+      if (startIndex) {
+        data.push({
+          deviceName,
+          sampleTimes: sampleTimes.slice(startIndex),
+          samples: samples.slice(startIndex)
+        })
+      } else {
+        data.push({ deviceName, startTime, sampleTimes, samples });
+      }
+    }
+    sendJSON(res, data);
+    return;
+  }
+
   if (req.url.startsWith("/profile")) {
     try {
       sendJSON(res, profileFromData(), true);
@@ -1391,9 +1427,13 @@ const app = (req, res) => {
     res.end('Power data reset');
     return;
   }
+
+  if (req.url == "/" || req.url == "/index.html") {
+    fileServer.serveFile('/index.html', 200, {}, req, res);
+  }
 };
 
-var server;
+var server, fileServer;
 
 async function runPowerCollectionServer(customPort) {
   const port = customPort || process.env.PORT || 2121;
@@ -1401,6 +1441,7 @@ async function runPowerCollectionServer(customPort) {
   server.listen(port, "0.0.0.0", () => {
     console.log(`Ensure devtools.performance.recording.power.external-url is set to http://localhost:${port}/power in 'about:config'.`);
   });
+  fileServer = new nStatic.Server();
 }
 
 if (require.main === module) {

@@ -1,6 +1,6 @@
 {
   "name": "usb-power-profiling",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "Make USB power meters usable with the Firefox Profiler",
   "homepage": "https://github.com/fqueze/usb-power-profiling/",
   "repository": "github:fqueze/usb-power-profiling",
@@ -12,6 +12,7 @@
   "dependencies": {
     "crc-full": "^1.1.0",
     "node-hid": "^3.0.0",
+    "node-static": "^0.7.11",
     "serialport": "^12.0.0",
     "usb": "^2.9.0"
   }
