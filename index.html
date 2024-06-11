@@ -15,11 +15,57 @@
 .profile > div > svg {
   position: absolute;
 }
-.profile > div > svg > path {
+path {
   fill: #73737388;
   stroke: #737373;
-  stroke-width: 6px;
+  stroke-width: 15px;
   stroke-linejoin: bevel;
+}
+/* stock-width = 3px * (viewBox width = 2400px) / min-width */
+@media (min-width: 600px) {
+  path {
+    stroke-width: 12px;
+  }
+}
+@media (min-width: 720px) {
+  path {
+    stroke-width: 10px;
+  }
+}
+@media (min-width: 900px) {
+  path {
+    stroke-width: 8px;
+  }
+}
+@media (min-width: 1020px) {
+  path {
+    stroke-width: 7px;
+  }
+}
+@media (min-width: 1200px) {
+  path {
+    stroke-width: 6px;
+  }
+}
+@media (min-width: 1440px) {
+  path {
+    stroke-width: 5px;
+  }
+}
+@media (min-width: 1800px) {
+  path {
+    stroke-width: 4px;
+  }
+}
+@media (min-width: 2400px) {
+  path {
+    stroke-width: 3px;
+  }
+}
+@media (min-width: 3400px) {
+  path {
+    stroke-width: 2px;
+  }
 }
 .profile > p {
   text-align: center;
