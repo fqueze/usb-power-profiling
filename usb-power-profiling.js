@@ -442,6 +442,12 @@ ShizukuDevice.prototype = {
     this.deviceName = this.deviceName.replace(/ in Application Mode$/, "");
 
     try {
+      await resetDevice(this.device);
+    } catch(e) {
+      // resetDevice already logs the error.
+    }
+
+    try {
       [this.endPointIn, this.endPointOut] = findBulkInOutEndPoints(this.device);
     } catch(e) {
       console.log(e);
