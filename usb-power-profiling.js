@@ -1148,9 +1148,7 @@ function initialize() {
       return;
     }
     gClosing = true;
-    if (gDevices.length > 0) {
-      await Promise.all(gDevices.map(d => d.stopSampling()));
-    }
+    await stopSampling();
     process.exit();
   });
 
