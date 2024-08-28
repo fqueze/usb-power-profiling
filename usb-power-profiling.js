@@ -410,7 +410,7 @@ ShizukuDevice.prototype = {
         payload[1] != 0 ||   // ?? Maybe this was a 16 bit value.
         payload[2] != this.samplingRequestId ||
         payload[3] != 0) { // Seems to be 0x80 for replies and 0 otherwise.
-      console.log("ignoring unexpected payload", payload);
+      console.log("ignoring unexpected payload", payload, JSON.stringify(this.expectedReplies));
       if (nextData) {
         DEBUG_log("processing next data");
         this.ondata(nextData);
@@ -1128,6 +1128,14 @@ async function startSampling() {
   }
 }
 
+async function stopSampling() {
+  if (gDevices.length == 0) {
+    console.log("No device found");
+  } else {
+    await Promise.all(gDevices.map(d => d.stopSampling()));
+  }
+}
+
 var initialized = false;
 
 function initialize() {
@@ -1140,9 +1148,7 @@ function initialize() {
       return;
     }
     gClosing = true;
-    if (gDevices.length > 0) {
-      await Promise.all(gDevices.map(d => d.stopSampling()));
-    }
+    await stopSampling();
     process.exit();
   });
 
@@ -1452,6 +1458,7 @@ if (require.main === module) {
 
 module.exports = {
   startSampling,
+  stopSampling,
   getPowerData,
   resetPowerData,
   profileFromData
