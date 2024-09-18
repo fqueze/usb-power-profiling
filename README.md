@@ -62,3 +62,15 @@ Compatibility with these devices has not been verified, but they are likely to e
 |WITRN|U3L|Expected to use the same protocol as the C5.|
 |WITRN|C4 / C4L|Expected to be the same as the C5 with lower data precision.|
 |ATORCH|C13P|Expected to be the same as the ACD15P.|
+
+# Installation on Windows
+Windows requires the WinUSB driver to be installed and bound in order to work.
+
+The instructions below are for the `AVHzY CT-3`. The USB ID at least will be different for other devices.
+- Install Zadig driver installer from https://zadig.akeo.ie/
+- Plug in the USB power meter and run the Zadig application
+- Disable the Options -> Ignore Hubs or Composite Parents option in the menu
+- Select the USB device for the meter (for CT-3 it is USB ID 0483 FFFE)
+- Click Replace to install the default WinUSB driver
+
+With those steps, it should now be possible to run the node application above and sample power.
