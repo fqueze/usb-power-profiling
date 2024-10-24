@@ -359,7 +359,7 @@ footer img {
 
       let isReady = false;
       window.addEventListener("message", function listener(event) {
-        if (event.data && event.data.name === "is-ready") {
+        if (event.data && event.data.name === "ready:response") {
           window.removeEventListener("message", listener);
           isReady = true;
           const message = {
@@ -375,7 +375,7 @@ footer img {
         if (isReady) {
           break;
         }
-        profilerWindow.postMessage({ name: "is-ready" }, origin);
+        profilerWindow.postMessage({ name: "ready:request" }, origin);
       }
     }
 
