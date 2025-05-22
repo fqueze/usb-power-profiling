@@ -43,14 +43,21 @@ function int32Bytes(number) {
 }
 
 function resetDevice(device) {
-  return new Promise((resolve, reject) => device.reset(error => {
-    if (error) {
-      console.log("failed to reset device", error);
-      reject(error);
-    } else {
-      resolve();
+  return new Promise((resolve, reject) => {
+      if (process.env.DISABLE_USB_POWER_METER_RESET) {
+        resolve();
+      } else {
+        device.reset(error => {
+          if (error) {
+            console.log("failed to reset device", error);
+            reject(error);
+          } else {
+            resolve();
+          }
+        });
+      }
     }
-  }));
+  );
 }
 
 function sendBuffer(endPointOut, buffer) {
